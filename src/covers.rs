@@ -487,3 +487,89 @@ mod tests {
         assert!(m[0].1 >= 0.6);
     }
 }
+
+// ------------------------------------------------------------------ pictures for a game
+
+/// Title screen and gameplay screenshot of a game from libretro-thumbnails (the same project
+/// the covers come from). PC ports use the pictures of the game they are a port of.
+pub fn picture_urls(theme: PathBuf, system: System, name: &str, stem: &str) -> Vec<String> {
+    let (repo, title): (&'static str, String) = if system == System::Pc {
+        let key = squash(&format!("{name} {stem}"));
+        match PC_PORTS.iter().find(|(keys, _, _)| keys.split('|').any(|k| key.contains(k))) {
+            Some((_, r, t)) => (*r, t.to_string()),
+            None => return vec![],
+        }
+    } else {
+        match system.cover_repo() {
+            Some(r) => (r, name.to_string()),
+            None => return vec![],
+        }
+    };
+    let net = Net::new(theme);
+    let names = net.libretro_names_in(repo);
+    let Some((best, score)) = best_matches(&title, if system == System::Pc { &title } else { stem }, &names, 1).into_iter().next() else { return vec![] };
+    if score < 0.6 {
+        return vec![];
+    }
+    ["Named_Titles", "Named_Snaps"]
+        .iter()
+        .map(|kind| format!("https://raw.githubusercontent.com/libretro-thumbnails/{repo}/master/{kind}/{}.png", pct(&best)))
+        .collect()
+}
+
+/// Screenshots from a project's README (badges, logos and the like left out).
+pub fn readme_images(repo: &str, readme: &str) -> Vec<String> {
+    let mut urls = vec![];
+    let mut push = |u: &str| {
+        let u = u.trim().trim_matches(|c| c == '"' || c == '\'').split_whitespace().next().unwrap_or("").to_string();
+        if u.is_empty() {
+            return;
+        }
+        let full = if u.starts_with("http") {
+            u.replace("github.com/", "raw.githubusercontent.com/").replacen("/blob/", "/", 1).replace("raw.githubusercontent.com/user-attachments", "github.com/user-attachments")
+        } else {
+            format!("https://raw.githubusercontent.com/{repo}/HEAD/{}", u.trim_start_matches("./").trim_start_matches('/'))
+        };
+        let l = full.to_lowercase();
+        let bad = ["discord", "badge", "shields.io", "logo", "poweredby", "powered_by", "widget", "sponsor", "ko-fi", "patreon", "icon", ".svg", ".gif", "button"];
+        let image = l.contains("user-attachments") || [".png", ".jpg", ".jpeg", ".webp"].iter().any(|e| l.split('?').next().unwrap_or("").ends_with(e));
+        if image && !bad.iter().any(|b| l.contains(b)) && !urls.contains(&full) {
+            urls.push(full);
+        }
+    };
+    // ![alt](url "title")
+    let mut rest = readme;
+    while let Some(i) = rest.find("](") {
+        let after = &rest[i + 2..];
+        if rest[..i].rfind("![").map(|j| !rest[j..i].contains('\n')).unwrap_or(false) {
+            if let Some(end) = after.find(')') {
+                push(&after[..end]);
+            }
+        }
+        rest = after;
+    }
+    // <img src="url">
+    let mut rest = readme;
+    while let Some(i) = rest.find("src=") {
+        let after = &rest[i + 4..];
+        let q = after.chars().next().unwrap_or('"');
+        if q == '"' || q == '\'' {
+            if let Some(end) = after[1..].find(q) {
+                push(&after[1..1 + end]);
+            }
+        }
+        rest = after;
+    }
+    urls.truncate(4);
+    urls
+}
+
+#[cfg(test)]
+mod pic_tests {
+    #[test]
+    fn readme_filter() {
+        let md = "![Discord Invitation](https://discordapp.com/api/guilds/1/widget.png?style=banner2 'N64')\n![Gyro](docs/deck_gyro_1.jpg)\n<img alt=\"x\" src=\"./docs/poweredbylus.lightmode.png\">\n<img src=\"https://github.com/user-attachments/assets/abc\" width=600>";
+        let v = super::readme_images("Zelda64Recomp/Zelda64Recomp", md);
+        assert_eq!(v, vec!["https://raw.githubusercontent.com/Zelda64Recomp/Zelda64Recomp/HEAD/docs/deck_gyro_1.jpg".to_string(), "https://github.com/user-attachments/assets/abc".to_string()]);
+    }
+}

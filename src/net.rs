@@ -166,6 +166,8 @@ pub enum Job {
     InstallPort(&'static PortInfo, Release),
     /// Download and swap in a new NXE Launcher.
     UpdateSelf(Release),
+    /// Pictures for a game or port page.
+    Pictures { key: String, system: crate::systems::System, name: String, stem: String, readme: Option<&'static str> },
 }
 
 pub enum Msg {
@@ -173,6 +175,8 @@ pub enum Msg {
     Progress(&'static str, f32),
     Installed(&'static str, Result<String, String>),
     SelfReady(Result<PathBuf, String>),
+    /// Encoded images (PNG/JPG) for a page; empty = none found.
+    Pictures(String, Vec<Vec<u8>>),
 }
 
 fn agent() -> ureq::Agent {
@@ -262,6 +266,35 @@ pub fn spawn(rx: Receiver<Job>, tx: Sender<Msg>, ctx: eframe::egui::Context) {
                         let _ = tx.send(Msg::Latest(r, latest(&agent, r)));
                         ctx.request_repaint();
                     }
+                }
+                Job::Pictures { key, system, name, stem, readme } => {
+                    let mut urls = crate::covers::picture_urls(crate::theme_dir(), system, &name, &stem);
+                    if let Some(repo) = readme {
+                        let md = agent
+                            .get(&format!("https://raw.githubusercontent.com/{repo}/HEAD/README.md"))
+                            .call()
+                            .ok()
+                            .filter(|r| r.status() == 200)
+                            .and_then(|mut r| r.body_mut().read_to_string().ok())
+                            .unwrap_or_default();
+                        urls.extend(crate::covers::readme_images(repo, &md));
+                    }
+                    let mut imgs = vec![];
+                    for u in urls.iter().take(6) {
+                        let Ok(mut r) = agent.get(u).call() else { continue };
+                        if r.status() != 200 {
+                            continue;
+                        }
+                        let Ok(b) = r.body_mut().with_config().limit(8 << 20).read_to_vec() else { continue };
+                        // Skip anything that isn't a real picture or is tiny (icons).
+                        if let Ok(img) = image::load_from_memory(&b) {
+                            if img.width() >= 160 && img.height() >= 100 {
+                                imgs.push(b);
+                            }
+                        }
+                    }
+                    let _ = tx.send(Msg::Pictures(key, imgs));
+                    ctx.request_repaint();
                 }
                 Job::InstallPort(p, rel) => {
                     let res = (|| {

@@ -197,6 +197,16 @@ Native PC versions of console games (recompilations such as Zelda 64: Recompiled
 
 RecompLauncher (recomplauncher.com) has no desktop app yet; once it ships, its library can be imported the same way.
 
+## Gamerpic folders
+The gamerpic list loads every picture from `theme\gamerpics` (created empty, put your pictures there) and from any folder you add: **Add a Folder** in the gamerpic list, or Settings → Profile → Add a Gamerpic Folder. Pictures are centre-cropped to a square and get the same glossy 360-style finish as the built-in ones. Big folders scroll.
+
+## RetroAchievements
+Sign in once in Settings → Achievements (your normal username and password). Then:
+- **Your points** show under your name, every game with achievements gets a progress bar, and **X** opens the game's achievement list (also from the Guide menu in a game).
+- **Achievement unlocked pop-ups:** achievements are unlocked by the emulator while you play. When you come back to the dashboard, NXE Launcher asks RetroAchievements what's new since the game started and shows a 360-style "Achievement unlocked" pop-up for each one.
+- **Sign In My Emulators Too** (Settings → Achievements) signs PCSX2, Dolphin and PPSSPP in with the same account, by writing the settings each of them writes after its own login. DuckStation encrypts its sign-in with a key tied to your PC, so sign in there once yourself. Built-in cores are signed in automatically.
+- Optionally your RetroAchievements profile picture as gamerpic.
+
 ## Controllers
 Xbox, PlayStation 3/4/5, Switch Pro, Joy-Cons and most other gamepads work. The button icons on screen follow the controller you last pressed a button on: Xbox letters, PlayStation shapes or Nintendo letters (Settings → Controller lets you fix one style).
 
@@ -224,10 +234,11 @@ Highlight a game and press **Y** (keyboard: C):
   Compressed images (CHD, CSO) don't expose the serial, so for those only NXE Launcher's own time is shown. Xenia, xemu, melonDS, Azahar and RMG don't record play time.
 - **Pin to Home** puts the game at the front of the Home channel.
 - **Hide This Game** removes it from the dashboard (Settings → General → Hidden Games shows them again).
+- **Pictures:** the title screen and a gameplay screenshot of the game (from libretro-thumbnails, the same project the covers come from); ports installed through Get Ports also show the screenshots from their project page. Left / Right scrolls through them.
 - **Change Cover**, **Achievements**.
 
 ## Get Ports
-PC Ports channel → **Get More Ports** (or Settings → Consoles → PC Ports → Get Ports) lists well-known ports — Zelda 64: Recompiled, Ship of Harkinian, 2 Ship 2 Harkinian, Starship, Spaghetti Kart, Banjo: Recompiled, Goemon 64: Recompiled, SM64 Co-op DX, Unleashed Recompiled, Marathon Recompiled, Dusk. Press A to download the latest Windows release from the project's GitHub page into the launcher's `ports` folder; when a new version comes out the row says **Update** and A updates it (the port's own settings and saves are kept). You always bring your own game files; each entry says which.
+PC Ports channel → **Get More Ports** (or Settings → Consoles → PC Ports → Get Ports) lists well-known ports — Zelda 64: Recompiled, Ship of Harkinian, 2 Ship 2 Harkinian, Starship, Spaghetti Kart, Banjo: Recompiled, Goemon 64: Recompiled, SM64 Co-op DX, Unleashed Recompiled, Marathon Recompiled, Dusk. Press A to download the latest Windows release from the project's GitHub page into the launcher's `ports` folder; when a new version comes out the row says **Update** and A updates it (the port's own settings and saves are kept). You always bring your own game files; each entry says which. Each port shows pictures of the game (Left / Right to scroll).
 
 ## Your profile file
 Your name, gamerpic, theme, play time, pinned and hidden games are kept in **Documents\NXE Launcher\profile.json** — outside the launcher's folder, so they survive deleting or moving it. When you set the launcher up again, Quick Setup says **Welcome Back! Restore My Profile**. Settings → General can also save a copy anywhere (USB stick, cloud folder) and load one. Your RetroAchievements password/token is never stored in it.

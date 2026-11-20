@@ -278,60 +278,114 @@ fn symbol(p: &egui::Painter, sym: Sym, c: Pos2, r: f32, col: Color32) {
 pub struct PicPicker {
     pub sel: usize,
     pub opened: Instant,
+    /// Scroll position in rows (animated).
+    pub scroll: f32,
 }
 
-/// Picker entries: built-ins, then pictures from theme\gamerpics, then "your own picture",
-/// then the RetroAchievements picture if signed in.
+/// Picker entries: your own picture, add a folder, RetroAchievements picture,
+/// then the built-ins, then every picture from your gamerpic folders.
 fn entries(app: &App) -> usize {
-    BUILTIN + app.user_pics.len() + 2
+    ACTIONS + BUILTIN + app.user_pics.len()
 }
 
-#[derive(PartialEq)]
+const ACTIONS: usize = 3;
+
+#[derive(PartialEq, Clone, Copy)]
 enum Entry {
+    Own,
+    AddFolder,
+    Ra,
     Builtin(usize),
     File(usize),
-    Own,
-    Ra,
 }
 
 fn entry(app: &App, i: usize) -> Entry {
-    let f = app.user_pics.len();
-    if i < BUILTIN {
-        Entry::Builtin(i)
-    } else if i < BUILTIN + f {
-        Entry::File(i - BUILTIN)
-    } else if i == BUILTIN + f {
-        Entry::Own
-    } else {
-        Entry::Ra
+    let _ = app;
+    match i {
+        0 => Entry::Own,
+        1 => Entry::AddFolder,
+        2 => Entry::Ra,
+        i if i < ACTIONS + BUILTIN => Entry::Builtin(i - ACTIONS),
+        i => Entry::File(i - ACTIONS - BUILTIN),
     }
 }
 
-/// Square, centre-cropped pictures dropped into theme\gamerpics (name = file name).
-pub fn load_user_pics(ctx: &egui::Context) -> Vec<(String, egui::TextureHandle)> {
-    let dir = theme_dir().join("gamerpics");
-    let _ = std::fs::create_dir_all(&dir);
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().map(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp")).unwrap_or(false))
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    files
+/// Folders searched for gamerpics: theme\gamerpics (always) plus the ones you added.
+pub fn gamerpic_dirs(app: &App) -> Vec<std::path::PathBuf> {
+    let mut v = vec![theme_dir().join("gamerpics")];
+    v.extend(app.cfg.gamerpic_dirs.iter().map(std::path::PathBuf::from));
+    v
+}
+
+fn pic_files(dirs: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    let mut out = vec![];
+    for d in dirs {
+        let _ = std::fs::create_dir_all(d);
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(d)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp")).unwrap_or(false))
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+        for f in files {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+/// Square, centre-cropped thumbnails of every picture in your gamerpic folders
+/// (name = file name). Already-loaded pictures are reused.
+pub fn load_user_pics(ctx: &egui::Context, dirs: &[std::path::PathBuf], old: &[(String, egui::TextureHandle)]) -> Vec<(String, egui::TextureHandle)> {
+    pic_files(dirs)
         .into_iter()
         .filter_map(|p| {
+            let key = p.to_string_lossy().to_string();
+            if let Some(o) = old.iter().find(|(k, _)| split_key(k).0 == key) {
+                return Some(o.clone());
+            }
             let img = image::open(&p).ok()?;
             let side = img.width().min(img.height());
-            let img = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side).thumbnail(256, 256).to_rgba8();
+            let img = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side).resize_exact(192, 192, image::imageops::FilterType::Lanczos3).to_rgba8();
             let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
             let name = p.file_stem()?.to_string_lossy().replace(['_', '-'], " ");
-            let key = p.file_name()?.to_string_lossy().to_string();
             Some((format!("{key}\u{0}{name}"), ctx.load_texture(format!("upic_{key}"), ci, egui::TextureOptions::LINEAR)))
         })
         .collect()
+}
+
+/// The texture for a "file:..." gamerpic (full path, or just a file name from older versions).
+fn file_tex(app: &App, key: &str) -> Option<egui::TextureId> {
+    app.user_pics
+        .iter()
+        .find(|(k, _)| {
+            let full = split_key(k).0;
+            full == key || std::path::Path::new(full).file_name().map(|n| n.to_string_lossy() == key).unwrap_or(false)
+        })
+        .map(|(_, t)| t.id())
+}
+
+/// The 360-style finish on any picture: soft top gloss, light top/left edge, dark
+/// bottom/right edge, so photos sit with the built-in gamerpics.
+pub fn pic_finish(p: &egui::Painter, r: Rect, a: f32) {
+    let s = r.width();
+    let gloss = p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.right(), r.top() + s * 0.42)).intersect(p.clip_rect()));
+    gloss.circle_filled(pos2(r.center().x - s * 0.1, r.top() - s * 0.95), s * 1.35, Color32::from_white_alpha((26.0 * a) as u8));
+    let t = (s * 0.018).max(1.0);
+    p.line_segment([r.left_top(), r.right_top()], Stroke::new(t, Color32::from_white_alpha((80.0 * a) as u8)));
+    p.line_segment([r.left_top(), r.left_bottom()], Stroke::new(t, Color32::from_white_alpha((45.0 * a) as u8)));
+    p.line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(t, Color32::from_black_alpha((70.0 * a) as u8)));
+    p.line_segment([r.right_top(), r.right_bottom()], Stroke::new(t, Color32::from_black_alpha((55.0 * a) as u8)));
+}
+
+fn draw_tex(p: &egui::Painter, t: egui::TextureId, r: Rect, a: f32) {
+    p.image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+    pic_finish(p, r, a);
 }
 
 /// Tile shown for the RetroAchievements picture before it's available.
@@ -340,6 +394,18 @@ fn ra_placeholder(p: &egui::Painter, r: Rect, a: f32, u: f32) {
     crate::scene::icon_pub(p, crate::Icon::Trophy, r.center() - vec2(0.0, r.height() * 0.08), r.width() * 0.26, Color32::from_rgb(240, 200, 80).gamma_multiply(a));
     let fs = (r.width() * 0.12).clamp(9.0 * u, 18.0 * u);
     p.text(pos2(r.center().x, r.bottom() - r.height() * 0.16), Align2::CENTER_CENTER, "Sign In", FontId::proportional(fs), Color32::WHITE.gamma_multiply(a));
+    pic_finish(p, r, a);
+}
+
+/// Plain tile for "Your Picture" / "Add a Folder".
+fn action_tile(p: &egui::Painter, r: Rect, a: f32, u: f32, icon: crate::Icon, label: &str) {
+    p.add(grad(r, Color32::from_rgb(92, 108, 124).gamma_multiply(a), Color32::from_rgb(54, 66, 80).gamma_multiply(a)));
+    let ic = if label.is_empty() { r.center() } else { r.center() - vec2(0.0, r.height() * 0.1) };
+    crate::scene::icon_pub(p, icon, ic, r.width() * 0.2, Color32::WHITE.gamma_multiply(a));
+    if !label.is_empty() {
+        p.text(pos2(r.center().x, r.bottom() - r.height() * 0.15), Align2::CENTER_CENTER, label, FontId::proportional((r.width() * 0.13).min(13.0 * u)), Color32::WHITE.gamma_multiply(a));
+    }
+    pic_finish(p, r, a);
 }
 
 fn split_key(k: &str) -> (&str, &str) {
@@ -356,30 +422,60 @@ pub fn current_name(app: &App) -> String {
         return "RetroAchievements picture".into();
     }
     if let Some(f) = g.strip_prefix("file:") {
-        return app.user_pics.iter().map(|(k, _)| split_key(k)).find(|(key, _)| *key == f).map(|(_, n)| n.to_string()).unwrap_or_else(|| f.to_string());
+        return app
+            .user_pics
+            .iter()
+            .map(|(k, _)| split_key(k))
+            .find(|(key, _)| *key == f || std::path::Path::new(key).file_name().map(|n| n.to_string_lossy() == f).unwrap_or(false))
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| std::path::Path::new(f).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
     }
     let n: usize = g.strip_prefix("builtin:").and_then(|n| n.parse().ok()).unwrap_or(0);
     NAMES[n % BUILTIN].to_string()
 }
 
 impl App {
-    pub fn open_pic_picker(&mut self) {
+    pub fn reload_user_pics(&mut self) {
         if let Some(ctx) = self.ctx().cloned() {
-            self.user_pics = load_user_pics(&ctx);
+            let dirs = gamerpic_dirs(self);
+            self.user_pics = load_user_pics(&ctx, &dirs, &self.user_pics);
         }
-        let f = self.user_pics.len();
+    }
+
+    pub fn open_pic_picker(&mut self) {
+        self.reload_user_pics();
         let g = self.cfg.gamerpic.clone();
         let sel = match g.as_str() {
-            "custom" => BUILTIN + f,
-            "ra" => BUILTIN + f + 1,
+            "custom" => 0,
+            "ra" => 2,
             s if s.starts_with("file:") => {
                 let key = &s[5..];
-                BUILTIN + self.user_pics.iter().position(|(k, _)| split_key(k).0 == key).unwrap_or(0)
+                self.user_pics
+                    .iter()
+                    .position(|(k, _)| {
+                        let full = split_key(k).0;
+                        full == key || std::path::Path::new(full).file_name().map(|n| n.to_string_lossy() == key).unwrap_or(false)
+                    })
+                    .map(|i| ACTIONS + BUILTIN + i)
+                    .unwrap_or(ACTIONS)
             }
-            s => s.strip_prefix("builtin:").and_then(|n| n.parse().ok()).unwrap_or(0),
+            s => ACTIONS + s.strip_prefix("builtin:").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0),
         };
-        self.pic_picker = Some(PicPicker { sel, opened: Instant::now() });
+        self.pic_picker = Some(PicPicker { sel, opened: Instant::now(), scroll: 0.0 });
         self.sounds.play("select");
+    }
+
+    pub fn add_gamerpic_folder(&mut self, frame: &eframe::Frame) {
+        if let Some(d) = rfd::FileDialog::new().set_title("Choose a folder of gamerpics").set_parent(frame).pick_folder() {
+            let st = d.to_string_lossy().to_string();
+            if !self.cfg.gamerpic_dirs.contains(&st) {
+                self.cfg.gamerpic_dirs.push(st);
+                self.cfg.save();
+            }
+            let before = self.user_pics.len();
+            self.reload_user_pics();
+            self.toast(format!("{} gamerpic(s) added", self.user_pics.len().saturating_sub(before)));
+        }
     }
 
     pub fn pic_picker_input(&mut self, p: Pad, frame: &eframe::Frame, ctx: &egui::Context) {
@@ -407,6 +503,7 @@ impl App {
                     }
                     Entry::File(i) => {
                         let (key, name) = split_key(&self.user_pics[i].0);
+                        let _ = ctx;
                         let (key, name) = (key.to_string(), name.to_string());
                         self.cfg.gamerpic = format!("file:{key}");
                         self.toast(format!("Gamerpic: {name}"));
@@ -414,6 +511,10 @@ impl App {
                     Entry::Own => {
                         self.pic_picker = None;
                         self.choose_custom_picture(frame, ctx);
+                        return;
+                    }
+                    Entry::AddFolder => {
+                        self.add_gamerpic_folder(frame);
                         return;
                     }
                     Entry::Ra if self.ra_avatar().is_some() => {
@@ -479,46 +580,72 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let u = f.u;
     let n = entries(app);
     let cols = 6;
-    let rows_needed = n.div_ceil(cols).max(1) as f32;
     let gap = 14.0 * u;
-    let cell = (76.0 * u).min((f.panel.height() - 56.0 * u - (rows_needed - 1.0) * gap) / rows_needed);
-    let grid_w = cols as f32 * cell + (cols - 1) as f32 * gap;
     let x0 = f.panel.left() + 30.0 * u;
     let y0 = f.panel.top() + 28.0 * u;
+    let grid_h = f.panel.height() - 64.0 * u;
+    // Whole rows only: size the cells so they fill the height exactly.
+    let vis_rows = ((grid_h + gap) / (76.0 * u + gap)).floor().max(1.0) as usize;
+    let cell = ((grid_h - (vis_rows - 1) as f32 * gap) / vis_rows as f32).min(84.0 * u);
+    let grid_w = cols as f32 * cell + (cols - 1) as f32 * gap;
+    // Keep the selected row on screen.
+    let sel_row = sel / cols;
+    let total_rows = n.div_ceil(cols);
+    let pk = app.pic_picker.as_mut().unwrap();
+    let mut target = pk.scroll.round() as usize;
+    if sel_row < target {
+        target = sel_row;
+    } else if sel_row >= target + vis_rows {
+        target = sel_row + 1 - vis_rows;
+    }
+    pk.scroll += (target as f32 - pk.scroll) * 0.3;
+    let scroll = pk.scroll;
+    let app: &App = app;
+    let rows_h = vis_rows as f32 * cell + (vis_rows - 1) as f32 * gap;
+    let clip = Rect::from_min_size(pos2(x0 - 10.0 * u, y0 - 7.0 * u), vec2(grid_w + 20.0 * u, rows_h + 14.0 * u));
+    let gp = p.with_clip_rect(clip);
     for i in 0..n {
         let (cx, cy) = (i % cols, i / cols);
-        let r = Rect::from_min_size(pos2(x0 + cx as f32 * (cell + gap), y0 + cy as f32 * (cell + gap)), vec2(cell, cell));
+        let ry = cy as f32 - scroll;
+        if ry < -1.0 || ry > vis_rows as f32 {
+            continue;
+        }
+        let r = Rect::from_min_size(pos2(x0 + cx as f32 * (cell + gap), y0 + ry * (cell + gap)), vec2(cell, cell));
         if i == sel {
             let pulse = 0.75 + 0.25 * (app.time() * 4.0).sin().abs();
-            p.rect_filled(r.expand(6.0 * u), CornerRadius::same((8.0 * u) as u8), Color32::from_rgb(140, 210, 60).gamma_multiply(a * pulse));
+            gp.rect_filled(r.expand(5.0 * u), CornerRadius::same((7.0 * u) as u8), Color32::from_rgb(140, 210, 60).gamma_multiply(a * pulse));
         }
+        let tile = gp.with_clip_rect(r.intersect(clip));
         match entry(app, i) {
-            Entry::Builtin(n) => draw_builtin(&p.with_clip_rect(r), r, n, a),
-            Entry::File(n) => {
-                p.image(app.user_pics[n].1.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
-            }
-            Entry::Own => {
-                p.rect_filled(r, 4.0 * u, Color32::from_white_alpha((30.0 * a) as u8));
-                if let Some(t) = app.custom_pic() {
-                    p.image(t, r.shrink(10.0 * u), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a * 0.6));
-                }
-                crate::scene::icon_pub(&p, crate::Icon::Plus, r.center() - vec2(0.0, 8.0 * u), cell * 0.2, Color32::WHITE.gamma_multiply(a));
-                p.text(pos2(r.center().x, r.bottom() - 14.0 * u), Align2::CENTER_CENTER, "Your Picture", FontId::proportional(13.0 * u), Color32::WHITE.gamma_multiply(a));
-            }
-            Entry::Ra => {
-                if let Some(t) = app.ra_avatar() {
-                    p.image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
-                } else {
-                    ra_placeholder(&p, r, a, u);
-                }
-            }
+            Entry::Builtin(k) => draw_builtin(&tile, r, k, a),
+            Entry::File(k) => draw_tex(&tile, app.user_pics[k].1.id(), r, a),
+            Entry::Own => action_tile(&tile, r, a, u, crate::Icon::Image, "Your Picture"),
+            Entry::AddFolder => action_tile(&tile, r, a, u, crate::Icon::Plus, "Add a Folder"),
+            Entry::Ra => match app.ra_avatar() {
+                Some(t) => draw_tex(&tile, t, r, a),
+                None => ra_placeholder(&tile, r, a, u),
+            },
         }
-        p.rect_stroke(r, 3.0 * u, Stroke::new(1.0, Color32::from_white_alpha((50.0 * a) as u8)), StrokeKind::Inside);
+    }
+    // Scroll hints.
+    if scroll > 0.05 {
+        gp.text(pos2(x0 + grid_w * 0.5, y0 - 6.0 * u), Align2::CENTER_BOTTOM, "^", FontId::proportional(14.0 * u), Color32::from_white_alpha((160.0 * a) as u8));
+    }
+    if (scroll.round() as usize) + vis_rows < total_rows {
+        p.text(pos2(x0 + grid_w * 0.5, f.panel.bottom() - 10.0 * u), Align2::CENTER_BOTTOM, format!("{} more below", n.saturating_sub((scroll.round() as usize + vis_rows) * cols)), FontId::proportional(13.0 * u), Color32::from_white_alpha((160.0 * a) as u8));
     }
     let (title, label) = match entry(app, sel) {
         Entry::Builtin(n) => (NAMES[n].to_string(), format!("Built-in gamerpic {} of {}", n + 1, BUILTIN)),
-        Entry::File(n) => (split_key(&app.user_pics[n].0).1.to_string(), "From your theme\\gamerpics folder".into()),
+        Entry::File(n) => {
+            let full = split_key(&app.user_pics[n].0).0;
+            let folder = std::path::Path::new(full).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+            (split_key(&app.user_pics[n].0).1.to_string(), format!("From {folder}"))
+        }
         Entry::Own => ("Your Picture".into(), "Choose any image, then move and zoom it to fit.".into()),
+        Entry::AddFolder => (
+            "Add a Folder".into(),
+            format!("Pick a folder full of pictures and every one of them shows up here. {} folder(s) in use now.", gamerpic_dirs(app).len()),
+        ),
         Entry::Ra if app.ra_avatar().is_some() => ("RetroAchievements".into(), format!("The profile picture of {} on retroachievements.org.", app.cfg.ra_user)),
         Entry::Ra => (
             "RetroAchievements".into(),
@@ -530,20 +657,16 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let big = Rect::from_min_size(pos2(tx, y0), vec2(side, side));
     match entry(app, sel) {
         Entry::Builtin(n) => draw_builtin(&p.with_clip_rect(big), big, n, a),
-        Entry::File(n) => {
-            p.image(app.user_pics[n].1.id(), big, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
-        }
-        Entry::Ra => {
-            if let Some(t) = app.ra_avatar() {
-                p.image(t, big, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
-            } else {
-                ra_placeholder(&p, big, a, u);
-            }
-        }
-        Entry::Own => {
-            p.rect_filled(big, 4.0 * u, Color32::from_white_alpha((25.0 * a) as u8));
-            crate::scene::icon_pub(&p, crate::Icon::Plus, big.center(), side * 0.22, Color32::WHITE.gamma_multiply(a));
-        }
+        Entry::File(n) => draw_tex(&p, app.user_pics[n].1.id(), big, a),
+        Entry::Ra => match app.ra_avatar() {
+            Some(t) => draw_tex(&p, t, big, a),
+            None => ra_placeholder(&p, big, a, u),
+        },
+        Entry::Own => match app.custom_pic() {
+            Some(t) => draw_tex(&p, t, big, a),
+            None => action_tile(&p, big, a, u, crate::Icon::Image, ""),
+        },
+        Entry::AddFolder => action_tile(&p, big, a, u, crate::Icon::Plus, ""),
     }
     {
         p.rect_stroke(big, 4.0 * u, Stroke::new(1.5 * u, Color32::from_white_alpha((120.0 * a) as u8)), StrokeKind::Inside);
@@ -554,7 +677,7 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let g = p.layout(label, FontId::proportional(17.0 * u), Color32::from_rgb(200, 210, 220).gamma_multiply(a), f.panel.right() - tx - 30.0 * u);
     p.galley(pos2(tx, y), g, Color32::WHITE);
     let g = p.layout(
-        "Tip: put your own square pictures (PNG/JPG) in theme\\gamerpics and they show up here.".to_string(),
+        "Tip: use Add a Folder to load a whole folder of pictures, or put them in theme\\gamerpics.".to_string(),
         FontId::proportional(14.0 * u),
         Color32::from_white_alpha((150.0 * a) as u8),
         f.panel.right() - tx - 30.0 * u,
@@ -728,18 +851,10 @@ pub fn draw_cropper(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
 
 /// Draws the current gamerpic into `r`.
 pub fn draw_current(app: &App, p: &egui::Painter, r: Rect, a: f32) {
-    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     match app.cfg.gamerpic.as_str() {
-        "custom" if app.custom_pic().is_some() => {
-            p.image(app.custom_pic().unwrap(), r, uv, Color32::WHITE.gamma_multiply(a));
-        }
-        "ra" if app.ra_avatar().is_some() => {
-            p.image(app.ra_avatar().unwrap(), r, uv, Color32::WHITE.gamma_multiply(a));
-        }
-        s if s.starts_with("file:") && app.user_pics.iter().any(|(k, _)| split_key(k).0 == &s[5..]) => {
-            let t = app.user_pics.iter().find(|(k, _)| split_key(k).0 == &s[5..]).unwrap().1.id();
-            p.image(t, r, uv, Color32::WHITE.gamma_multiply(a));
-        }
+        "custom" if app.custom_pic().is_some() => draw_tex(p, app.custom_pic().unwrap(), r, a),
+        "ra" if app.ra_avatar().is_some() => draw_tex(p, app.ra_avatar().unwrap(), r, a),
+        s if s.starts_with("file:") && file_tex(app, &s[5..]).is_some() => draw_tex(p, file_tex(app, &s[5..]).unwrap(), r, a),
         s => {
             let n = s.strip_prefix("builtin:").and_then(|n| n.parse().ok()).unwrap_or(0);
             draw_builtin(&p.with_clip_rect(r), r, n, a);

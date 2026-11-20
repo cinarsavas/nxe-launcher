@@ -94,6 +94,9 @@ pub enum RowId {
     CheckUpdates,
     InstallUpdate,
     GetPorts,
+    AddPicFolder,
+    RaEmulators,
+    PicFolder(usize),
     ExportProfile,
     ImportProfile,
     HiddenGames,
@@ -275,6 +278,18 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                     "Pick one of the built-in gamerpics, or one from your theme\\gamerpics folder.",
                 ));
                 v.push(Row::new(RowId::CustomPic, "Use My Own Picture", Value::Action, "Choose any image from your PC, then move and zoom it until it looks right."));
+                v.push(Row::new(
+                    RowId::AddPicFolder,
+                    "Add a Gamerpic Folder",
+                    Value::Action,
+                    format!(
+                        "Pick a folder full of pictures; every picture in it shows up in the gamerpic list. {} is always used too (it starts empty, put your pictures there).",
+                        crate::theme_dir().join("gamerpics").to_string_lossy()
+                    ),
+                ));
+                for (i, d) in cfg.gamerpic_dirs.iter().enumerate() {
+                    v.push(Row::new(RowId::PicFolder(i), short_path(d), Value::Text("Remove".into()), format!("{d}\n\nPress A to stop using this folder. Nothing is deleted.")));
+                }
             }
             CAT_DISPLAY => {
                 v.push(Row::new(RowId::Theme, "Theme", Value::Text(cap(&cfg.theme)), "Colour of the dashboard. Press A to switch."));
@@ -368,6 +383,12 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                         app.ra_status.clone().unwrap_or_default(),
                     ));
                     v.push(Row::new(RowId::RaRefresh, "Refresh", Value::Action, "Reload your points and progress."));
+                    v.push(Row::new(
+                        RowId::RaEmulators,
+                        "Sign In My Emulators Too",
+                        Value::Action,
+                        "Achievements are unlocked by the emulator while you play, so the emulator must be signed in too. Press A to sign PCSX2, Dolphin and PPSSPP in with this account (close them first). DuckStation keeps its sign-in encrypted, so sign in there once yourself. Built-in cores are signed in automatically.",
+                    ));
                     if app.ra_avatar().is_some() && cfg.gamerpic != "ra" {
                         v.push(Row::new(RowId::RaUsePic, "Use My RetroAchievements Picture", Value::Action, "Make your retroachievements.org profile picture your gamerpic."));
                     }
@@ -797,6 +818,34 @@ impl App {
                 }
             }
             RowId::GetPorts => self.open_ports_page(),
+            RowId::AddPicFolder => self.add_gamerpic_folder(frame),
+            RowId::RaEmulators => {
+                let (user, token) = (self.cfg.ra_user.clone(), self.cfg.ra_token.clone());
+                let mut ok = vec![];
+                let mut notes = vec![];
+                for s in [System::Ps2, System::Gc, System::Psp] {
+                    let Some(exe) = self.cfg.emulator(s) else { continue };
+                    match crate::emusettings::ra_sign_in(s, &exe, &user, &token) {
+                        Ok(n) => ok.push(n),
+                        Err(e) => notes.push(format!("{}: {e}", s.emu_label())),
+                    }
+                }
+                let msg = match (ok.is_empty(), notes.is_empty()) {
+                    (true, true) => "None of PCSX2, Dolphin or PPSSPP is set up here".to_string(),
+                    (false, true) => format!("Signed in: {}", ok.join(", ")),
+                    (true, false) => notes.join(" · "),
+                    (false, false) => format!("Signed in: {} · {}", ok.join(", "), notes.join(" · ")),
+                };
+                self.toast(msg);
+            }
+            RowId::PicFolder(i) => {
+                if i < self.cfg.gamerpic_dirs.len() {
+                    self.cfg.gamerpic_dirs.remove(i);
+                    self.cfg.save();
+                    self.reload_user_pics();
+                    self.toast("Folder removed");
+                }
+            }
             RowId::RestoreProfile => {
                 if let Some(pr) = crate::stats::Profile::load_from(&crate::stats::path()) {
                     self.restore_profile(pr);
@@ -1924,6 +1973,7 @@ pub struct Details {
     pub game: usize,
     pub sel: usize,
     pub opened: Instant,
+    pub pic: usize,
     /// What the emulator itself recorded (read once when the page opens).
     pub emu: Option<crate::playtime::EmuTime>,
 }
@@ -1941,7 +1991,8 @@ impl App {
     pub fn open_details(&mut self, gi: usize) {
         let Some(g) = self.games.get(gi) else { return };
         let emu = crate::playtime::emulator_time(g, self.cfg.emulator(g.system).as_deref());
-        self.details = Some(Details { game: gi, sel: 0, opened: Instant::now(), emu });
+        self.details = Some(Details { game: gi, sel: 0, opened: Instant::now(), emu, pic: 0 });
+        self.request_game_pictures(gi);
         self.sounds.play("select");
     }
 
@@ -2015,7 +2066,69 @@ impl App {
                 None => {}
             },
             Pad::X => self.open_achievements(gi),
+            Pad::Left | Pad::Right | Pad::Lb | Pad::Rb => {
+                let n = self.gallery_len(&format!("game:{}", crate::stats::key(&self.games[gi])));
+                if let Some(d) = self.details.as_mut() {
+                    if step_pic(&mut d.pic, n, matches!(p, Pad::Right | Pad::Rb)) {
+                        self.sounds.play("move");
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    pub fn gallery_len(&self, key: &str) -> usize {
+        self.pictures.get(key).and_then(|v| v.as_ref()).map(|v| v.len()).unwrap_or(0)
+    }
+}
+
+fn step_pic(i: &mut usize, n: usize, fwd: bool) -> bool {
+    if n < 2 {
+        return false;
+    }
+    *i = if fwd { (*i + 1) % n } else { (*i + n - 1) % n };
+    true
+}
+
+/// A picture gallery in `r`: the current picture as large as fits, with dots and arrows
+/// when there are more (Left / Right to scroll).
+pub fn draw_gallery(p: &egui::Painter, app: &App, key: &str, sel: usize, r: Rect, a: f32, u: f32) {
+    if r.height() < 60.0 * u {
+        return;
+    }
+    let dim = Color32::from_white_alpha((150.0 * a) as u8);
+    match app.pictures.get(key) {
+        None => {}
+        Some(None) => {
+            p.text(r.left_top() + vec2(0.0, 6.0 * u), Align2::LEFT_TOP, "Loading pictures…", FontId::proportional(14.0 * u), dim);
+        }
+        Some(Some(v)) if v.is_empty() => {}
+        Some(Some(v)) => {
+            let n = v.len();
+            let i = sel % n;
+            let (tex, aspect) = &v[i];
+            let area = Rect::from_min_max(r.min, pos2(r.right(), r.bottom() - if n > 1 { 22.0 * u } else { 0.0 }));
+            let mut w = area.width();
+            let mut h = w / aspect.max(0.01);
+            if h > area.height() {
+                h = area.height();
+                w = h * aspect;
+            }
+            let pr = Rect::from_min_size(area.left_top(), vec2(w, h));
+            p.rect_filled(pr.translate(vec2(0.0, 4.0 * u)), 4.0 * u, Color32::from_black_alpha((70.0 * a) as u8));
+            p.image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+            p.rect_stroke(pr, 3.0 * u, Stroke::new(1.0 * u, Color32::from_white_alpha((70.0 * a) as u8)), egui::StrokeKind::Inside);
+            if n > 1 {
+                let y = pr.bottom() + 13.0 * u;
+                let mut x = pr.left() + 6.0 * u;
+                for k in 0..n {
+                    let on = k == i;
+                    p.circle_filled(pos2(x, y), if on { 4.0 * u } else { 3.0 * u }, Color32::from_white_alpha(((if on { 230.0 } else { 90.0 }) * a) as u8));
+                    x += 13.0 * u;
+                }
+                p.text(pos2(x + 6.0 * u, y), Align2::LEFT_CENTER, format!("{} of {}  ·  Left / Right for more pictures", i + 1, n), FontId::proportional(13.0 * u), dim);
+            }
         }
     }
 }
@@ -2049,24 +2162,30 @@ pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     // Right side: cover, then the facts.
     let r = f.right;
     let cover = app.cover(ctx, gi);
-    let ch = 190.0 * u;
-    let mut y = r.top() + 6.0 * u;
+    let ch = 150.0 * u;
+    let top = r.top() + 6.0 * u;
+    let mut fx = r.left();
+    let mut cover_bottom = top;
     if let Some((tex, aspect, _)) = cover {
-        let cw = (ch * aspect).min(r.width() * 0.6);
-        let cr = Rect::from_min_size(pos2(r.left(), y), vec2(cw, cw / aspect.max(0.01)));
+        let cw = (ch * aspect).min(r.width() * 0.45);
+        let cr = Rect::from_min_size(pos2(r.left(), top), vec2(cw, cw / aspect.max(0.01)));
         p.rect_filled(cr.translate(vec2(0.0, 4.0 * u)), 3.0 * u, Color32::from_black_alpha((70.0 * a) as u8));
         p.image(tex, cr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
-        y = cr.bottom() + 16.0 * u;
+        fx = cr.right() + 18.0 * u;
+        cover_bottom = cr.bottom();
     }
+    let mut y = top;
     let (secs, source, last) = app.time_played(gi, emu.as_ref());
     let ours = app.profile.stat(&g).cloned().unwrap_or_default();
     let dim = Color32::from_rgb(178, 190, 202).gamma_multiply(a);
+    let fw = r.right() - fx;
+    // Facts beside the cover: label above value, so they fit a narrow column.
     let fact = |y: &mut f32, k: &str, v: &str| {
-        p.text(pos2(r.left(), *y), Align2::LEFT_TOP, k, FontId::proportional(15.0 * u), dim);
-        p.text(pos2(r.left() + 140.0 * u, *y), Align2::LEFT_TOP, fit(&p, v, &FontId::proportional(17.0 * u), r.width() - 140.0 * u), FontId::proportional(17.0 * u), Color32::WHITE.gamma_multiply(a));
-        *y += 27.0 * u;
+        p.text(pos2(fx, *y), Align2::LEFT_TOP, k, FontId::proportional(13.0 * u), dim);
+        p.text(pos2(fx, *y + 16.0 * u), Align2::LEFT_TOP, fit(&p, v, &FontId::proportional(17.0 * u), fw), FontId::proportional(17.0 * u), Color32::WHITE.gamma_multiply(a));
+        *y += 42.0 * u;
     };
-    let src = if secs == 0 { String::new() } else { format!("  (from {source})") };
+    let src = if secs == 0 { String::new() } else { format!(" (from {source})") };
     fact(&mut y, "Time Played", &format!("{}{}", crate::stats::fmt_secs(secs), src));
     fact(&mut y, "Last Played", &last.map(crate::stats::fmt_date).unwrap_or_else(|| "Never".into()));
     if ours.sessions > 0 {
@@ -2075,9 +2194,7 @@ pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some(id) = &g.id {
         fact(&mut y, "Game ID", id);
     }
-    if pinned {
-        fact(&mut y, "Pinned", "Yes, on Home");
-    }
+    let mut y = y.max(cover_bottom + 8.0 * u);
     let note = match (&emu, g.system) {
         (Some(_), _) => String::new(),
         (None, crate::systems::System::Ps2 | crate::systems::System::Ps1 | crate::systems::System::Psp) if g.id.is_none() => {
@@ -2087,8 +2204,10 @@ pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     };
     if !note.is_empty() {
         y += 4.0 * u;
-        para(&p, pos2(r.left(), y), &note, 14.0 * u, r.width(), dim);
+        y += para(&p, pos2(r.left(), y), &note, 14.0 * u, r.width(), dim);
     }
+    let pic = app.details.as_ref().map(|d| d.pic).unwrap_or(0);
+    draw_gallery(&p, app, &format!("game:{}", crate::stats::key(&g)), pic, Rect::from_min_max(pos2(r.left(), y + 8.0 * u), pos2(r.right(), f.panel.bottom() - 44.0 * u)), a, u);
     p.text(
         pos2(r.left(), f.panel.bottom() - 30.0 * u),
         Align2::LEFT_CENTER,
@@ -2104,6 +2223,8 @@ pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
 pub struct PortsPage {
     pub sel: usize,
     pub opened: Instant,
+    /// Picture shown in the gallery.
+    pub pic: usize,
 }
 
 /// What A does on a port, and the text shown for it.
@@ -2136,11 +2257,26 @@ impl App {
         match p {
             Pad::Up if pg.sel > 0 => {
                 pg.sel -= 1;
+                pg.pic = 0;
+                let s = pg.sel;
                 self.sounds.play("move");
+                self.request_port_pictures(s);
             }
             Pad::Down if pg.sel + 1 < n => {
                 pg.sel += 1;
+                pg.pic = 0;
+                let s = pg.sel;
                 self.sounds.play("move");
+                self.request_port_pictures(s);
+            }
+            Pad::Left | Pad::Right | Pad::Lb | Pad::Rb => {
+                let key = format!("port:{}", crate::net::PORTS[pg.sel].repo);
+                let n = self.gallery_len(&key);
+                if let Some(pg) = self.ports_page.as_mut() {
+                    if step_pic(&mut pg.pic, n, matches!(p, Pad::Right | Pad::Rb)) {
+                        self.sounds.play("move");
+                    }
+                }
             }
             Pad::B => {
                 self.ports_page = None;
@@ -2233,9 +2369,11 @@ pub fn draw_ports(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     y += para(&p, pos2(r.left(), y), &what, 16.0 * u, w, Color32::from_rgb(178, 220, 120).gamma_multiply(a)) + 10.0 * u;
     if let Some(Some(Ok(rel))) = app.ports.get(port.repo).map(|s| s.latest.clone()) {
         if let Some((name, _, size)) = rel.windows_asset() {
-            para(&p, pos2(r.left(), y), &format!("Download: {name} ({:.0} MB)", *size as f64 / 1_048_576.0), 13.0 * u, w, Color32::from_white_alpha((140.0 * a) as u8));
+            y += para(&p, pos2(r.left(), y), &format!("Download: {name} ({:.0} MB)", *size as f64 / 1_048_576.0), 13.0 * u, w, Color32::from_white_alpha((140.0 * a) as u8));
         }
     }
+    let pic = app.ports_page.as_ref().map(|g| g.pic).unwrap_or(0);
+    draw_gallery(&p, app, &format!("port:{}", port.repo), pic, Rect::from_min_max(pos2(r.left(), y + 12.0 * u), pos2(r.right(), f.panel.bottom() - 44.0 * u)), a, u);
     p.text(
         pos2(r.left(), f.panel.bottom() - 30.0 * u),
         Align2::LEFT_CENTER,

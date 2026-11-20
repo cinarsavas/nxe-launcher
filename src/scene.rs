@@ -902,3 +902,52 @@ pub fn fmt_duration(d: std::time::Duration) -> String {
 fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
+
+/// 360-style "Achievement unlocked" pop-up at the bottom of the screen, one after another.
+pub fn draw_unlock(app: &mut App, ui: &egui::Ui, ctx: &egui::Context) {
+    if app.playing().is_some() || app.unlocks.is_empty() {
+        return;
+    }
+    const SHOW: f32 = 4.5;
+    let start = *app.unlock_shown.get_or_insert_with(|| {
+        std::time::Instant::now()
+    });
+    let t = start.elapsed().as_secs_f32();
+    if t > SHOW {
+        app.unlocks.pop_front();
+        app.unlock_shown = None;
+        ctx.request_repaint();
+        return;
+    }
+    if t < 0.02 {
+        app.sounds.play("select");
+    }
+    let Some(a) = app.unlocks.front().cloned() else { return };
+    let screen = ctx.content_rect();
+    let (w, h) = (screen.width(), screen.height());
+    let u = (h / 720.0).min(w / 1280.0);
+    let p = ui.painter_at(screen);
+    // Grow out from the trophy, hold, then fade.
+    let open = ease_out(seg(t, 0.15, 0.35));
+    let alpha = seg(t, 0.0, 0.2) * (1.0 - seg(t, SHOW - 0.4, 0.4));
+    let full_w = 460.0 * u;
+    let bw = 64.0 * u + (full_w - 64.0 * u) * open;
+    let r = Rect::from_center_size(pos2(w * 0.5, 64.0 * u), vec2(bw, 64.0 * u));
+    let rounding = CornerRadius::same((32.0 * u) as u8);
+    p.rect_filled(r.translate(vec2(0.0, 4.0 * u)), rounding, Color32::from_black_alpha((90.0 * alpha) as u8));
+    p.rect_filled(r, rounding, Color32::from_rgb(28, 32, 36).gamma_multiply(alpha));
+    p.rect_stroke(r, rounding, Stroke::new(1.5 * u, Color32::from_white_alpha((60.0 * alpha) as u8)), egui::StrokeKind::Inside);
+    let c = pos2(r.left() + 32.0 * u, r.center().y);
+    p.circle_filled(c, 24.0 * u, Color32::from_rgb(240, 240, 240).gamma_multiply(alpha));
+    icon(&p, Icon::Trophy, c, 13.0 * u, Color32::from_rgb(60, 66, 72).gamma_multiply(alpha));
+    if open > 0.6 {
+        let ta = alpha * seg(open, 0.6, 0.4);
+        let tx = r.left() + 68.0 * u;
+        let clip = p.with_clip_rect(r.shrink(4.0 * u));
+        clip.text(pos2(tx, r.top() + 20.0 * u), Align2::LEFT_CENTER, "Achievement unlocked", FontId::proportional(14.0 * u), Color32::from_white_alpha((190.0 * ta) as u8));
+        let main = format!("{} G - {}", a.points, a.title);
+        let main = fit(&clip, &main, &FontId::proportional(19.0 * u), r.right() - tx - 24.0 * u);
+        clip.text(pos2(tx, r.top() + 42.0 * u), Align2::LEFT_CENTER, main, FontId::proportional(19.0 * u), Color32::WHITE.gamma_multiply(ta));
+    }
+    ctx.request_repaint();
+}

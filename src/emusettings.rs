@@ -336,3 +336,72 @@ mod tests {
         assert!(std::fs::read_to_string(&t).unwrap().contains("surface_scale = 2"));
     }
 }
+
+/// Sign an emulator in to RetroAchievements with the account you signed in with here, by
+/// writing the same settings the emulator writes after its own login (checked in each
+/// emulator's source). The emulator should be closed, or it may overwrite them.
+/// DuckStation encrypts its token with a key tied to the PC, so it can't be done for it.
+pub fn ra_sign_in(s: System, exe: &Path, user: &str, token: &str) -> Result<&'static str, String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).to_string();
+    let w = |f: &Path, sec: &str, k: &str, v: &str| write(f, sec, k, v).map_err(|e| e.to_string());
+    match s {
+        System::Ps2 => {
+            // PCSX2 moves a token found in PCSX2.ini into its secrets file on next start.
+            let (ini, _) = config_file(s, exe).ok_or("Open PCSX2 once first")?;
+            backup(&ini);
+            w(&ini, "Achievements", "Enabled", "true")?;
+            w(&ini, "Achievements", "Username", user)?;
+            w(&ini, "Achievements", "Token", token)?;
+            w(&ini, "Achievements", "LoginTimestamp", &now)?;
+            Ok("PCSX2")
+        }
+        System::Gc => {
+            let (_, dolphin) = config_file(s, exe).ok_or("Open Dolphin once first")?;
+            let f = dolphin.ok_or("Open Dolphin once first")?.with_file_name("RetroAchievements.ini");
+            backup(&f);
+            w(&f, "Achievements", "Enabled", "True")?;
+            w(&f, "Achievements", "Username", user)?;
+            w(&f, "Achievements", "ApiToken", token)?;
+            Ok("Dolphin")
+        }
+        System::Psp => {
+            // Username in ppsspp.ini, token in ppsspp_retroachievements.dat next to it.
+            let (ini, _) = config_file(s, exe).ok_or("Open PPSSPP once first")?;
+            backup(&ini);
+            w(&ini, "Achievements", "AchievementsEnable", "True")?;
+            w(&ini, "Achievements", "AchievementsUserName", user)?;
+            std::fs::write(ini.with_file_name("ppsspp_retroachievements.dat"), token).map_err(|e| e.to_string())?;
+            Ok("PPSSPP")
+        }
+        System::Ps1 => Err("DuckStation keeps its sign-in encrypted: sign in once in DuckStation > Settings > Achievements".into()),
+        _ => Err("This emulator doesn't use RetroAchievements".into()),
+    }
+}
+
+fn backup(f: &Path) {
+    let b = f.with_extension(format!("{}.nxe-backup", f.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()));
+    if f.is_file() && !b.exists() {
+        let _ = std::fs::copy(f, b);
+    }
+}
+
+#[cfg(test)]
+mod ra_tests {
+    #[test]
+    fn writes_pcsx2_and_ppsspp() {
+        let d = std::env::temp_dir().join("nxe_ra_t");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("inis")).unwrap();
+        std::fs::write(d.join("inis").join("PCSX2.ini"), "[UI]\r\nfoo=1\r\n").unwrap();
+        let exe = d.join("pcsx2-qt.exe");
+        assert_eq!(super::ra_sign_in(crate::systems::System::Ps2, &exe, "cinar", "TOKEN123"), Ok("PCSX2"));
+        let t = std::fs::read_to_string(d.join("inis").join("PCSX2.ini")).unwrap();
+        assert!(t.contains("[Achievements]") && t.contains("Token = TOKEN123") && t.contains("Username = cinar") && t.contains("Enabled = true"));
+        assert!(t.contains("\r\n"));
+        std::fs::create_dir_all(d.join("memstick").join("PSP").join("SYSTEM")).unwrap();
+        let pini = d.join("memstick").join("PSP").join("SYSTEM").join("ppsspp.ini");
+        std::fs::write(&pini, "[General]\nX = 1\n").unwrap();
+        assert_eq!(super::ra_sign_in(crate::systems::System::Psp, &exe, "cinar", "TOKEN123"), Ok("PPSSPP"));
+        assert_eq!(std::fs::read_to_string(pini.with_file_name("ppsspp_retroachievements.dat")).unwrap(), "TOKEN123");
+    }
+}

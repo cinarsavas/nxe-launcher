@@ -493,7 +493,7 @@ function frame(ms){
   if(da>0){ zoom(1+0.09*pa); g.globalAlpha=da; if(S.intro!==null) dashboard(th,t); g.globalAlpha=1; }
   if(pa>0.01){ const sub=lerp(S.subFrom,1,clamp(S.subAnim,0,1)); zoom((0.9+0.1*pa)*sub); settingsPage(th,t,Math.pow(clamp(pa,0,1),0.8)); }
   g.setTransform(1,0,0,1,0,0);
-  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.10.0",W-22,H-16); g.globalAlpha=1; }
+  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.11.0",W-22,H-16); g.globalAlpha=1; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

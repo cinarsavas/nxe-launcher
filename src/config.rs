@@ -68,6 +68,8 @@ pub struct Config {
     pub switch_layout: bool,
     /// Show games you hid.
     pub show_hidden: bool,
+    /// Extra folders of gamerpics (theme\gamerpics is always used).
+    pub gamerpic_dirs: Vec<String>,
     /// Your songs from theme\music on the dashboard.
     pub music_on: bool,
     /// 0-100
@@ -109,6 +111,7 @@ impl Default for Config {
             button_icons: "auto".into(),
             switch_layout: true,
             show_hidden: false,
+            gamerpic_dirs: vec![],
             music_on: true,
             music_volume: 60,
             discord_status: true,

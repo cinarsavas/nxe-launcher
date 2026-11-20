@@ -141,6 +141,12 @@ pub struct App {
     custom_pic_tex: Option<egui::TextureHandle>,
     /// Typed password, kept only in memory until you press Sign In.
     pub ra_password: String,
+    /// Achievements you had when the game started, to spot new unlocks afterwards.
+    ra_snap: Option<(u64, usize, Option<std::collections::HashSet<String>>)>,
+    ra_after_req: Option<u64>,
+    /// "Achievement unlocked" pop-ups waiting to be shown, and when the current one started.
+    pub unlocks: std::collections::VecDeque<ra::Achievement>,
+    pub unlock_shown: Option<Instant>,
     pub music_tx: std::sync::mpsc::Sender<music::Cmd>,
     music_rx: Receiver<music::Msg>,
     music_state: (bool, u32),
@@ -150,6 +156,8 @@ pub struct App {
     net_rx: Receiver<net::Msg>,
     pub ports: HashMap<&'static str, PortState>,
     pub ports_page: Option<menu::PortsPage>,
+    /// Picture galleries by page key: None = still loading.
+    pub pictures: HashMap<String, Option<Vec<(egui::TextureHandle, f32)>>>,
     pub update: Option<net::Release>,
     pub update_progress: Option<f32>,
     pub profile: stats::Profile,
@@ -274,6 +282,10 @@ impl App {
             cropper: None,
             custom_pic_tex: None,
             ra_password: String::new(),
+            ra_snap: None,
+            ra_after_req: None,
+            unlocks: Default::default(),
+            unlock_shown: None,
             music_tx,
             music_rx,
             music_state: (false, u32::MAX),
@@ -283,6 +295,7 @@ impl App {
             net_rx,
             ports: HashMap::new(),
             ports_page: None,
+            pictures: HashMap::new(),
             update: None,
             update_progress: None,
             profile: stats::Profile::load(),
@@ -304,7 +317,7 @@ impl App {
             ctx_handle: Some(cc.egui_ctx.clone()),
         };
         app.reload_custom_pic_ctx(&cc.egui_ctx);
-        app.user_pics = profile::load_user_pics(&cc.egui_ctx);
+        app.user_pics = profile::load_user_pics(&cc.egui_ctx, &profile::gamerpic_dirs(&app), &[]);
         app.load_cached_ra_avatar(&cc.egui_ctx);
         app.cfg.apply_controller();
         app.theme_from = scene::theme(&app.cfg.theme);
@@ -774,6 +787,24 @@ impl App {
                     self.ra_sets = sets;
                     self.ra_rematch();
                 }
+                ra::Msg::Game { req, game_id, title, list } if self.ra_snap.as_ref().map(|s| s.0 == req).unwrap_or(false) => {
+                    let earned: std::collections::HashSet<String> = list.iter().filter(|a| a.earned).map(|a| a.title.clone()).collect();
+                    if let Some(s) = self.ra_snap.as_mut() {
+                        s.2 = Some(earned);
+                    }
+                    let _ = (game_id, title);
+                }
+                ra::Msg::Game { req, game_id, title, list } if self.ra_after_req == Some(req) => {
+                    self.ra_after_req = None;
+                    let before = self.ra_snap.take().and_then(|s| s.2).unwrap_or_default();
+                    for a in list.iter().filter(|a| a.earned && !before.contains(&a.title)) {
+                        self.unlocks.push_back(a.clone());
+                    }
+                    let earned = list.iter().filter(|a| a.earned).count() as u32;
+                    self.ra_progress.insert(game_id, (earned, list.len() as u32));
+                    let _ = title;
+                    self.ra_refresh();
+                }
                 ra::Msg::Game { req, game_id, title, list } => {
                     let earned = list.iter().filter(|a| a.earned).count() as u32;
                     self.ra_progress.insert(game_id, (earned, list.len() as u32));
@@ -956,6 +987,16 @@ impl App {
                 self.playing = Some(name);
                 self.play_game = game;
                 self.play_started = Some(Instant::now());
+                // Remember which achievements you already had.
+                self.ra_snap = None;
+                if let Some(gid) = game.and_then(|g| self.ra_match.get(&g).copied()) {
+                    if self.ra_signed_in() && std::env::var("NXE_FAKE_RA").is_err() {
+                        self.picker_req += 1;
+                        let req = self.picker_req;
+                        self.ra_snap = Some((req, game.unwrap(), None));
+                        let _ = self.ra_tx.send(ra::Job::Game { req, game_id: gid, user: self.cfg.ra_user.clone(), token: self.cfg.ra_token.clone() });
+                    }
+                }
                 if self.cfg.minimize_while_playing {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
@@ -1171,6 +1212,16 @@ impl eframe::App for App {
                 drop(lock);
                 self.shared.running.store(false, Ordering::Relaxed);
                 self.shared.guide_open.store(false, Ordering::Relaxed);
+                // Ask RetroAchievements what's new since the game started.
+                if let (Some((_, gi, Some(_))), Some(gid)) = (&self.ra_snap, self.play_game.and_then(|g| self.ra_match.get(&g).copied())) {
+                    let _ = gi;
+                    self.picker_req += 1;
+                    self.ra_after_req = Some(self.picker_req);
+                    let _ = self.ra_tx.send(ra::Job::Game { req: self.picker_req, game_id: gid, user: self.cfg.ra_user.clone(), token: self.cfg.ra_token.clone() });
+                }
+                if std::env::var("NXE_FAKE_RA").is_ok() && self.play_game.map(|g| self.ra_match.contains_key(&g)).unwrap_or(false) {
+                    self.unlocks.push_back(ra::Achievement { title: "Test Unlock".into(), desc: "".into(), points: 10, badge: String::new(), earned: true, hardcore: false });
+                }
                 if let (Some(gi), Some(t)) = (self.play_game.take(), self.play_started.take()) {
                     if let Some(g) = self.games.get(gi) {
                         let secs = t.elapsed().as_secs();
@@ -1351,6 +1402,7 @@ impl eframe::App for App {
         }
         ui.scope_builder(egui::UiBuilder::new().layer_id(top_layer).max_rect(screen), |ui| {
             menu::draw_dialog(self, ui, &ctx);
+            scene::draw_unlock(self, ui, &ctx);
             if self.guide.is_some() {
                 if self.ach.is_some() {
                     menu::draw_achievements(self, ui, &ctx);
@@ -1441,6 +1493,20 @@ impl App {
                         Err(e) => self.toast(format!("{name}: {e}")),
                     }
                 }
+                net::Msg::Pictures(key, imgs) => {
+                    let ctx = self.ctx().cloned();
+                    let texs: Vec<(egui::TextureHandle, f32)> = imgs
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, b)| {
+                            let img = image::load_from_memory(b).ok()?.thumbnail(1280, 720).to_rgba8();
+                            let aspect = img.width() as f32 / img.height().max(1) as f32;
+                            let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                            Some((ctx.as_ref()?.load_texture(format!("pic_{key}_{i}"), ci, egui::TextureOptions::LINEAR), aspect))
+                        })
+                        .collect();
+                    self.pictures.insert(key, Some(texs));
+                }
                 net::Msg::SelfReady(r) => {
                     self.update_progress = None;
                     match r {
@@ -1457,6 +1523,30 @@ impl App {
         }
     }
 
+    /// Ask for a page's pictures once.
+    pub fn request_pictures(&mut self, key: String, system: System, name: String, stem: String, readme: Option<&'static str>) {
+        if self.pictures.contains_key(&key) {
+            return;
+        }
+        self.pictures.insert(key.clone(), None);
+        let _ = self.net_tx.send(net::Job::Pictures { key, system, name, stem, readme });
+    }
+
+    pub fn request_port_pictures(&mut self, i: usize) {
+        if let Some(p) = net::PORTS.get(i) {
+            self.request_pictures(format!("port:{}", p.repo), System::Pc, p.name.to_string(), p.folder.to_string(), Some(p.repo));
+        }
+    }
+
+    pub fn request_game_pictures(&mut self, gi: usize) {
+        let Some(g) = self.games.get(gi) else { return };
+        // A port installed from Get Ports also gets its README screenshots.
+        let readme = net::PORTS.iter().find(|p| g.path.starts_with(net::ports_dir().join(p.folder))).map(|p| p.repo);
+        let key = format!("game:{}", stats::key(g));
+        let (sys, name, stem) = (g.system, g.name.clone(), g.stem());
+        self.request_pictures(key, sys, name, stem, readme);
+    }
+
     pub fn open_ports_page(&mut self) {
         let stale: Vec<&'static str> = net::PORTS
             .iter()
@@ -1466,7 +1556,8 @@ impl App {
         if !stale.is_empty() {
             let _ = self.net_tx.send(net::Job::Check(stale));
         }
-        self.ports_page = Some(menu::PortsPage { sel: 0, opened: Instant::now() });
+        self.ports_page = Some(menu::PortsPage { sel: 0, opened: Instant::now(), pic: 0 });
+        self.request_port_pictures(0);
         self.sounds.play("select");
     }
 
