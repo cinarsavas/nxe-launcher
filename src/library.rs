@@ -59,7 +59,12 @@ pub struct CoverDirs {
 
 pub fn scan(system: System, dirs: &[PathBuf], cover_dirs: &CoverDirs) -> Vec<Game> {
     let mut out = Vec::new();
-    for d in dirs {
+    if system == System::Pc {
+        for d in dirs {
+            pc_scan(d, 0, &mut out);
+        }
+    }
+    for d in dirs.iter().filter(|_| system != System::Pc) {
         if d.is_dir() {
             if system == System::Ps3 {
                 if let Some(g) = ps3_folder(d) {
@@ -118,6 +123,7 @@ fn walk(system: System, dir: &Path, depth: usize, out: &mut Vec<Game>) {
         }
         let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         match system {
+            System::Pc => {}
             System::Xbox360 => match ext.as_str() {
                 "iso" => out.push(simple(system, p, "Disc image")),
                 "zar" => out.push(simple(system, p, "ZAR archive")),
@@ -459,4 +465,141 @@ fn ps2_serial(p: &Path) -> Option<String> {
         i += len;
     }
     None
+}
+
+// ------------------------------------------------------------------ PC ports
+
+/// Words in exe names that are never the game itself.
+const NOT_GAME: [&str; 22] = [
+    "unins", "uninstall", "setup", "install", "update", "crash", "redist", "vc_", "dxsetup", "dxwebsetup", "helper",
+    "dotnet", "createdump", "githublauncher", "n64recomplauncher", "nxe-launcher", "reporter", "elevate", "ue4prereq",
+    "vulkan", "7z", "config",
+];
+
+fn exes_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
+    let mut v: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false))
+        .filter(|p| {
+            let n = p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            !NOT_GAME.iter().any(|w| n.contains(w))
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+}
+
+/// The game's exe in a port folder: the one GitHub Launcher remembers, else the one named most
+/// like the folder, else the biggest.
+pub fn pc_main_exe(dir: &Path) -> Option<PathBuf> {
+    if let Ok(t) = std::fs::read_to_string(dir.join("selected_executable.txt")) {
+        let t = t.trim();
+        let p = if Path::new(t).is_absolute() { PathBuf::from(t) } else { dir.join(t) };
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let mut exes = exes_in(dir);
+    if exes.is_empty() {
+        // Some zips unpack into one extra folder (e.g. Port\Port-v1.2\Port.exe).
+        let Ok(rd) = std::fs::read_dir(dir) else { return None };
+        let subs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        if subs.len() == 1 {
+            exes = exes_in(&subs[0]);
+        }
+    }
+    let folder = squash(&dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    exes.into_iter().max_by_key(|p| {
+        let stem = squash(&p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+        let named = !stem.is_empty() && (folder.contains(&stem) || stem.contains(&folder));
+        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        (named, size)
+    })
+}
+
+/// "Zelda64Recompiled" -> "Zelda 64 Recompiled", "UnleashedRecomp" -> "Unleashed Recomp".
+pub fn pretty_name(s: &str) -> String {
+    // Drop trailing version tags: "Starship_v1.2" / "Port-1.0.3" / "Game Windows x64".
+    let is_noise = |t: &str| {
+        let l = t.to_lowercase();
+        let v = l.strip_prefix('v').unwrap_or(&l);
+        (!v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.') && v.chars().next().unwrap().is_ascii_digit() && (l.starts_with('v') || l.contains('.')))
+            || matches!(l.as_str(), "win" | "win64" | "windows" | "x64" | "x86" | "portable" | "release")
+    };
+    let mut toks: Vec<&str> = s.split(['_', '-', ' ']).filter(|t| !t.is_empty()).collect();
+    while toks.len() > 1 && is_noise(toks[toks.len() - 1]) {
+        toks.pop();
+    }
+    let s = clean_name(&toks.join(" ").replace('.', " "));
+    let mut out = String::new();
+    let cs: Vec<char> = s.chars().collect();
+    for (i, &c) in cs.iter().enumerate() {
+        if i > 0 && c != ' ' && cs[i - 1] != ' ' {
+            let prev = cs[i - 1];
+            let next_lower = cs.get(i + 1).map(|n| n.is_lowercase()).unwrap_or(false);
+            let split = (c.is_uppercase() && (prev.is_lowercase() || (prev.is_uppercase() && next_lower)))
+                || (c.is_ascii_digit() && prev.is_lowercase())
+                || (c.is_uppercase() && prev.is_ascii_digit() && c != 'D');
+            if split {
+                out.push(' ');
+            }
+        }
+        out.push(c);
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A folder is either one port (it has the game's exe) or a folder of ports (one per sub-folder).
+/// A path straight to an .exe also works.
+fn pc_scan(d: &Path, depth: usize, out: &mut Vec<Game>) {
+    let game = |exe: PathBuf, name_from: &Path| Game {
+        system: System::Pc,
+        name: pretty_name(&name_from.file_stem().or(name_from.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+        path: exe,
+        kind: "PC port",
+        id: None,
+        cover: None,
+        embedded: None,
+        cover_from_file: false,
+    };
+    if d.is_file() {
+        if d.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
+            out.push(game(d.to_path_buf(), d));
+        }
+        return;
+    }
+    if let Some(exe) = pc_main_exe(d) {
+        out.push(game(exe, d));
+        return;
+    }
+    if depth >= 1 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(d) else { return };
+    let mut subs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    subs.sort();
+    for s in subs {
+        pc_scan(&s, depth + 1, out);
+    }
+}
+
+#[cfg(test)]
+mod pc_tests {
+    use super::pretty_name;
+    #[test]
+    fn names() {
+        assert_eq!(pretty_name("Zelda64Recompiled"), "Zelda 64 Recompiled");
+        assert_eq!(pretty_name("UnleashedRecomp"), "Unleashed Recomp");
+        assert_eq!(pretty_name("Sonic3AIR"), "Sonic 3 AIR");
+        assert_eq!(pretty_name("SM64CoopDX"), "SM64 Coop DX");
+        assert_eq!(pretty_name("Power Moon Recomp"), "Power Moon Recomp");
+        assert_eq!(pretty_name("Starship_v1.2"), "Starship");
+        assert_eq!(pretty_name("Zelda64Recompiled-v1.2.0-Windows"), "Zelda 64 Recompiled");
+    }
 }

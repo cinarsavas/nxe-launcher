@@ -1,6 +1,6 @@
 # NXE Launcher
 
-A fullscreen, console-style dashboard laid out like the 2008 "NXE" dashboard. It launches games on eleven consoles, using your own emulators or built-in cores.
+A fullscreen, console-style dashboard laid out like the 2008 "NXE" dashboard. It launches games on eleven consoles, using your own emulators or built-in cores, plus native PC ports and recompilations.
 
 **[Try the live demo in your browser](https://cinarsavas.github.io/nxe-launcher/)** · **[Download for Windows](https://github.com/cinarsavas/nxe-launcher/releases/latest)**
 
@@ -186,6 +186,16 @@ game_dirs = []
 import_from_emulator = true
 ```
 The same keys exist under `[systems.xbox360]`, `[systems.ps2]` and `[systems.switch]`. Old v0.1 settings are migrated automatically.
+
+## PC Ports
+Native PC versions of console games (recompilations such as Zelda 64: Recompiled or Starship, and ports such as Ship of Harkinian) get their own **PC Ports** channel. They run on their own, no emulator needed.
+
+- **Settings → Consoles → PC Ports → Add Port Folder:** pick a port's folder, or a folder with several ports in it (one sub-folder each). The game's .exe is picked for you; uninstallers, updaters and redistributables are skipped.
+- **Add a Single Program:** pick one .exe directly.
+- **GitHub Launcher (optional):** if you install ports with GitHub Launcher (SirDiabo, formerly N64RecompLauncher), point to `GithubLauncher.exe` or its folder. Everything it installed shows up with the same names, and the exe it remembers is used. Updates still happen in GitHub Launcher.
+- Known ports get the original game's box art (e.g. Zelda 64: Recompiled → Majora's Mask). For anything else, press Y to pick a cover.
+
+RecompLauncher (recomplauncher.com) has no desktop app yet; once it ships, its library can be imported the same way.
 
 ## License
 MIT, see `LICENSE`. Trademarks belong to their owners.

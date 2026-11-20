@@ -40,6 +40,7 @@ pub struct Systems {
     pub psp: SystemCfg,
     pub ps1: SystemCfg,
     pub xbox: SystemCfg,
+    pub pc: SystemCfg,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -168,6 +169,7 @@ impl Config {
             System::N64 => &self.systems.n64,
             System::Ds => &self.systems.ds,
             System::N3ds => &self.systems.n3ds,
+            System::Pc => &self.systems.pc,
             System::Psp => &self.systems.psp,
             System::Ps1 => &self.systems.ps1,
             System::Xbox => &self.systems.xbox,
@@ -184,6 +186,7 @@ impl Config {
             System::N64 => &mut self.systems.n64,
             System::Ds => &mut self.systems.ds,
             System::N3ds => &mut self.systems.n3ds,
+            System::Pc => &mut self.systems.pc,
             System::Psp => &mut self.systems.psp,
             System::Ps1 => &mut self.systems.ps1,
             System::Xbox => &mut self.systems.xbox,
@@ -205,6 +208,9 @@ impl Config {
     /// How games for this console will be started. Cores are opt-in: "auto"
     /// only falls back to a core the user has already downloaded.
     pub fn launcher(&self, s: System) -> Launcher {
+        if s == System::Pc {
+            return Launcher::Native;
+        }
         let emu = self.emulator(s);
         let core = s.core().is_some();
         match self.sys(s).backend.as_str() {
@@ -231,5 +237,7 @@ pub enum Launcher {
     Emulator(PathBuf),
     /// Built-in libretro core (downloaded on first use).
     Core,
+    /// The game is a program of its own (PC ports).
+    Native,
     None,
 }

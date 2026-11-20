@@ -288,7 +288,20 @@ impl App {
                     dirs.extend(s.imported_dirs(e));
                 }
             }
-            all.extend(library::scan(s, &dirs, &self.cover_dirs(s)));
+            let mut found = library::scan(s, &dirs, &self.cover_dirs(s));
+            if s == System::Pc && c.import_from_emulator {
+                // Use the names GitHub Launcher shows for the apps it installed.
+                if let Some(e) = &emu {
+                    let apps = systems::github_launcher_apps(e);
+                    for g in &mut found {
+                        if let Some((n, _)) = apps.iter().find(|(n, d)| !n.is_empty() && g.path.starts_with(d)) {
+                            g.name = n.clone();
+                        }
+                    }
+                    found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                }
+            }
+            all.extend(found);
         }
         self.games = all;
         self.covers.clear();
@@ -401,7 +414,11 @@ impl App {
             if tiles.is_empty() {
                 tiles.push(Tile {
                     title: "Add games".into(),
-                    subtitle: format!("No {} games yet. Pick a folder with {}", s.short(), s.folder_hint()),
+                    subtitle: if s == System::Pc {
+                        "No PC ports yet. Pick a port's folder".into()
+                    } else {
+                        format!("No {} games yet. Pick a folder with {}", s.short(), s.folder_hint())
+                    },
                     action: Action::AddFolder(s),
                     game: None,
                     art: None,
@@ -803,6 +820,14 @@ impl App {
                 let mut cmd = Command::new(&exe);
                 cmd.arg("-L").arg(runtime::core_path(system).unwrap()).arg("--config").arg(runtime::write_config(&self.cfg.ra_user, &self.cfg.ra_token)).arg("-f").arg(&g.path);
                 (cmd, g.name.clone(), exe.parent().map(|p| p.to_path_buf()))
+            }
+            config::Launcher::Native => {
+                // PC ports are programs of their own: run the exe from its folder
+                // (they look for their assets next to themselves).
+                let Some(g) = game.and_then(|i| self.games.get(i)) else { return };
+                let mut cmd = Command::new(&g.path);
+                cmd.args(&self.cfg.sys(system).args);
+                (cmd, g.name.clone(), g.path.parent().map(|p| p.to_path_buf()))
             }
             config::Launcher::None => return,
         };

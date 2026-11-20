@@ -63,6 +63,7 @@ pub enum RowId {
     Import(System),
     Folder(System, usize),
     AddFolder(System),
+    AddExe(System),
     AutoCovers,
     FetchCovers,
     ResetCovers,
@@ -190,6 +191,7 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                         Launcher::Emulator(_) => (true, format!("Ready: plays with {}.", emu_label(s))),
                         Launcher::Core => (true, format!("Ready: plays with the built-in {}.", s.core().map(|c| c.name).unwrap_or(""))),
                         Launcher::None => (false, format!("Not set up yet: no {} found.", emu_label(s))),
+                        Launcher::Native => (count(s) > 0, "Native PC ports, no emulator needed.".to_string()),
                     };
                     let n = count(s);
                     v.push(Row::new(
@@ -310,7 +312,7 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
             }
             2 => {
                 v.push(Row::note("Emulators in folders next to the launcher are found automatically. Skip consoles you don't use."));
-                for s in systems::ALL {
+                for s in systems::ALL.into_iter().filter(|s| *s != System::Pc) {
                     let emu = cfg.emulator(s);
                     let txt = match &emu {
                         Some(p) => p.to_string_lossy().to_string(),
@@ -343,7 +345,52 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
 }
 
 /// One console's settings page (Settings > Consoles > [console]).
+fn pc_rows(app: &App, s: System, v: &mut Vec<Row>) {
+    let cfg = &app.cfg;
+    let gl = cfg.emulator(s);
+    let sc = cfg.sys(s);
+    let count = app.games.iter().filter(|g| g.system == s).count();
+    v.push(Row::note(
+        "Native PC versions of console games: recompilations like Zelda 64: Recompiled or Unleashed Recompiled, and ports like Ship of Harkinian. They run on their own, no emulator needed.",
+    ));
+    v.push(Row::new(
+        RowId::AddFolder(s),
+        "Add Port Folder",
+        Value::Action,
+        "Choose a port's folder (the one with its .exe), or a folder that has several ports in it, one folder each. The right .exe is picked for you.",
+    ));
+    v.push(Row::new(RowId::AddExe(s), "Add a Single Program", Value::Action, "Choose a game's .exe directly, if it lives somewhere with other programs."));
+    for (i, d) in sc.game_dirs.iter().enumerate() {
+        v.push(Row::new(RowId::Folder(s, i), short_path(d), Value::Text("Remove".into()), format!("{d}\n\nPress A to remove it from the list. Nothing is deleted.")));
+    }
+    v.push(Row::new(
+        RowId::Emulator(s),
+        "GitHub Launcher",
+        Value::Status(gl.is_some(), gl.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "Not set (optional)".into())),
+        "Optional. If you install ports with GitHub Launcher (formerly N64RecompLauncher), point to it here and everything it installed shows up on its own, with the same names.",
+    ));
+    if gl.is_some() {
+        let n = gl.as_ref().map(|e| crate::systems::github_launcher_apps(e).len()).unwrap_or(0);
+        v.push(Row::new(
+            RowId::Import(s),
+            "Show GitHub Launcher's Games",
+            Value::Toggle(sc.import_from_emulator),
+            format!("{n} installed app(s) found in GitHub Launcher. Updating them is still done in GitHub Launcher."),
+        ));
+    }
+    v.push(Row::new(
+        RowId::Args(s),
+        "Launch Options",
+        Value::Text(if sc.args.is_empty() { "None".into() } else { sc.args.join(" ") }),
+        "Advanced. Extra command-line options given to every PC port. Usually left empty.",
+    ));
+    v.push(Row::note(format!("{count} port(s) found. Close a port with Guide (or hold Back + Start) to come back here.")));
+}
+
 fn console_rows(app: &App, s: System, v: &mut Vec<Row>) {
+    if s == System::Pc {
+        return pc_rows(app, s, v);
+    }
     let cfg = &app.cfg;
     let emu = cfg.emulator(s);
     let sc = cfg.sys(s);
@@ -695,6 +742,7 @@ impl App {
                 }
             }
             RowId::AddFolder(s) => self.add_folder(s, frame),
+            RowId::AddExe(s) => self.add_exe(s, frame),
             RowId::AutoCovers => {
                 self.cfg.auto_covers = !self.cfg.auto_covers;
                 self.cfg.save();
@@ -741,6 +789,19 @@ impl App {
             self.rescan();
             let n = self.games.iter().filter(|g| g.system == s).count();
             self.toast(format!("{n} {} games found", s.short()));
+        }
+    }
+
+    pub fn add_exe(&mut self, s: System, frame: &eframe::Frame) {
+        if let Some(p) = rfd::FileDialog::new().set_title("Choose the game's program (.exe)").add_filter("Program", &["exe"]).set_parent(frame).pick_file() {
+            let st = p.to_string_lossy().to_string();
+            let c = self.cfg.sys_mut(s);
+            if !c.game_dirs.contains(&st) {
+                c.game_dirs.push(st);
+            }
+            self.cfg.save();
+            self.rescan();
+            self.toast(format!("Added {}", crate::library::pretty_name(&p.file_stem().unwrap_or_default().to_string_lossy())));
         }
     }
 

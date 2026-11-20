@@ -219,7 +219,10 @@ impl Net {
 
     /// Box-art file names in a libretro-thumbnails repo (cached on disk).
     fn libretro_names(&self, s: System) -> Vec<String> {
-        let r = repo(s);
+        self.libretro_names_in(repo(s))
+    }
+
+    fn libretro_names_in(&self, r: &'static str) -> Vec<String> {
         if let Some(v) = self.lists.lock().unwrap().get(r) {
             return v.clone();
         }
@@ -303,6 +306,20 @@ impl Net {
                 }
             }
         }
+        if g.system == System::Pc {
+            // A PC port uses the box art of the game it's a port of.
+            let key = squash(&format!("{} {}", g.name, g.stem));
+            if let Some((_, r, title)) = PC_PORTS.iter().find(|(keys, _, _)| keys.split('|').any(|k| key.contains(k))) {
+                let names = self.libretro_names_in(r);
+                for (name, score) in best_matches(title, title, &names, max_fuzzy.max(3)) {
+                    out.push(Cand {
+                        label: name.clone(),
+                        url: format!("https://raw.githubusercontent.com/libretro-thumbnails/{r}/master/Named_Boxarts/{}.png", pct(&name)),
+                        auto_ok: score >= 0.6,
+                    });
+                }
+            }
+        }
         if g.system.cover_repo().is_some() {
             let names = self.libretro_names(g.system);
             for (name, score) in best_matches(&g.name, &g.stem, &names, max_fuzzy) {
@@ -320,6 +337,51 @@ impl Net {
         out
     }
 }
+
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+}
+
+const N64: &str = "Nintendo_-_Nintendo_64";
+const GC: &str = "Nintendo_-_GameCube";
+const MD: &str = "Sega_-_Mega_Drive_-_Genesis";
+const SNES: &str = "Nintendo_-_Super_Nintendo_Entertainment_System";
+const PS1: &str = "Sony_-_PlayStation";
+const PS2: &str = "Sony_-_PlayStation_2";
+const DC: &str = "Sega_-_Dreamcast";
+const GBA: &str = "Nintendo_-_Game_Boy_Advance";
+const NES: &str = "Nintendo_-_Nintendo_Entertainment_System";
+
+/// Known PC ports: words in the exe/folder name (squashed, any of `|`), the original console's
+/// thumbnail repo, and the original game's title to look up there.
+const PC_PORTS: &[(&str, &str, &str)] = &[
+    ("zelda64|majora|2ship", N64, "Legend of Zelda, The - Majora's Mask (USA)"),
+    ("ocarina|soh|shipofharkinian|harkinian", N64, "Legend of Zelda, The - Ocarina of Time (USA)"),
+    ("starfox64|starship|sf64", N64, "Star Fox 64 (USA)"),
+    ("banjo|bkrecomp", N64, "Banjo-Kazooie (USA)"),
+    ("mariokart64|mk64|spaghettikart|spaghetti", N64, "Mario Kart 64 (USA)"),
+    ("sm64|supermario64|render96|mario64", N64, "Super Mario 64 (USA)"),
+    ("dk64|donkeykong64", N64, "Donkey Kong 64 (USA)"),
+    ("goemon|mnsg", N64, "Mystical Ninja Starring Goemon (USA)"),
+    ("perfectdark", N64, "Perfect Dark (USA)"),
+    ("drmario64", N64, "Dr. Mario 64 (USA)"),
+    ("paperma|papermario", N64, "Paper Mario (USA)"),
+    ("dusk|twilightprincess", GC, "Legend of Zelda, The - Twilight Princess (USA)"),
+    ("windwaker", GC, "Legend of Zelda, The - The Wind Waker (USA)"),
+    ("sonic3air|sonic3", MD, "Sonic The Hedgehog 3 (USA)"),
+    ("sonic2", MD, "Sonic The Hedgehog 2 (World)"),
+    ("smw|supermarioworld", SNES, "Super Mario World (USA)"),
+    ("zelda3|linktothepast|alttp", SNES, "Legend of Zelda, The - A Link to the Past (USA)"),
+    ("supermetroid", SNES, "Super Metroid (Japan, USA) (En,Ja)"),
+    ("re3|gta3", PS2, "Grand Theft Auto III (USA)"),
+    ("revc|vicecity|vcs", PS2, "Grand Theft Auto - Vice City (Europe) (En,Fr,De,Es,It) (v2.03)"),
+    ("sotn|symphony", PS1, "Castlevania - Symphony of the Night (USA)"),
+    ("crash", PS1, "Crash Bandicoot (USA)"),
+    ("spyro", PS1, "Spyro the Dragon (USA)"),
+    ("sonicadventure|sadx", DC, "Sonic Adventure (USA)"),
+    ("minishcap|tmc", GBA, "Legend of Zelda, The - The Minish Cap (USA)"),
+    ("smb1|supermariobros", NES, "Super Mario Bros. (World)"),
+];
 
 fn is_ps2_serial(s: &str) -> bool {
     let b = s.as_bytes();

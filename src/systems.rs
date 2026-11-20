@@ -17,9 +17,11 @@ pub enum System {
     Psp,
     Ps1,
     Xbox,
+    /// Native PC ports and recompilations (Zelda 64: Recompiled, Unleashed Recompiled, …).
+    Pc,
 }
 
-pub const ALL: [System; 11] = [
+pub const ALL: [System; 12] = [
     System::Xbox360,
     System::Xbox,
     System::Ps3,
@@ -31,6 +33,7 @@ pub const ALL: [System; 11] = [
     System::N64,
     System::Ds,
     System::N3ds,
+    System::Pc,
 ];
 
 /// A libretro core that can run this console when no emulator is installed.
@@ -57,6 +60,7 @@ impl System {
             System::Psp => "PSP",
             System::Ps1 => "PlayStation",
             System::Xbox => "Xbox",
+            System::Pc => "PC Ports",
         }
     }
     pub fn short(self) -> &'static str {
@@ -72,6 +76,7 @@ impl System {
             System::Psp => "PSP",
             System::Ps1 => "PS1",
             System::Xbox => "Xbox",
+            System::Pc => "PC",
         }
     }
     pub fn key(self) -> &'static str {
@@ -87,6 +92,7 @@ impl System {
             System::Psp => "psp",
             System::Ps1 => "ps1",
             System::Xbox => "xbox",
+            System::Pc => "pc",
         }
     }
     pub fn emu_label(self) -> &'static str {
@@ -102,6 +108,7 @@ impl System {
             System::Psp => "PPSSPP",
             System::Ps1 => "DuckStation",
             System::Xbox => "xemu",
+            System::Pc => "GitHub Launcher",
         }
     }
     pub fn core(self) -> Option<CoreInfo> {
@@ -151,7 +158,7 @@ impl System {
             System::Psp => "Sony_-_PlayStation_Portable",
             System::Ps1 => "Sony_-_PlayStation",
             System::Xbox => "Microsoft_-_Xbox",
-            System::Switch => return None,
+            System::Switch | System::Pc => return None,
         })
     }
     /// RetroAchievements console ID, for consoles RA supports.
@@ -179,6 +186,7 @@ impl System {
             System::Psp => "PPSSPPWindows64.exe",
             System::Ps1 => "duckstation-qt-x64-ReleaseLTCG.exe",
             System::Xbox => "xemu.exe",
+            System::Pc => "GithubLauncher.exe",
         }
     }
     pub fn folder_hint(self) -> &'static str {
@@ -194,6 +202,7 @@ impl System {
             System::Psp => ".iso, .cso, .chd, .pbp",
             System::Ps1 => ".cue, .chd, .pbp, .m3u, .iso",
             System::Xbox => ".iso (XISO format)",
+            System::Pc => "a port's folder, or a folder with several ports in it",
         }
     }
     fn exe_names(self) -> &'static [&'static str] {
@@ -218,6 +227,7 @@ impl System {
                 "duckstation",
             ],
             System::Xbox => &["xemu.exe", "xemu"],
+            System::Pc => &["GithubLauncher.exe", "N64RecompLauncher.exe", "GithubLauncher", "N64RecompLauncher"],
         }
     }
 
@@ -288,12 +298,16 @@ impl System {
             System::Psp => &["--fullscreen", "--escape-exit"],
             System::Ps1 => &["-fullscreen", "-batch", "--"],
             System::Xbox => &["-full-screen", "-dvd_path"],
+            System::Pc => &[],
         };
         v.iter().map(|s| s.to_string()).collect()
     }
 
     /// Folders the emulator itself is already set up with.
     pub fn imported_dirs(self, exe: &Path) -> Vec<PathBuf> {
+        if self == System::Pc {
+            return github_launcher_apps(exe).into_iter().map(|(_, p)| p).collect();
+        }
         let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
         let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).map(PathBuf::from).ok();
         let appdata = std::env::var("APPDATA").map(PathBuf::from).ok();
@@ -422,7 +436,7 @@ impl System {
                     }
                 }
             }
-            System::Xbox360 | System::N64 | System::Ds | System::Psp | System::Ps1 | System::Xbox => {}
+            System::Xbox360 | System::N64 | System::Ds | System::Psp | System::Ps1 | System::Xbox | System::Pc => {}
         }
         out.retain(|p| p.is_dir());
         out
@@ -481,6 +495,48 @@ fn json_string_array(s: &str, key: &str) -> Vec<String> {
             }
         } else if c == '"' {
             in_str = true;
+        }
+    }
+    out
+}
+
+/// Apps installed by GitHub Launcher (SirDiabo, formerly N64RecompLauncher): `apps.json`
+/// (or the older `games.json`) next to its exe lists them; each one lives in `installPath`,
+/// or `<AppsPath from settings.json, default "Apps">\<folderName>`.
+pub fn github_launcher_apps(exe: &Path) -> Vec<(String, PathBuf)> {
+    let base = if exe.is_dir() { exe.to_path_buf() } else { exe.parent().map(Path::to_path_buf).unwrap_or_default() };
+    let read = |n: &str| std::fs::read_to_string(base.join(n)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok());
+    let apps_dir = read("settings.json")
+        .and_then(|v| v["AppsPath"].as_str().filter(|s| !s.trim().is_empty()).map(PathBuf::from))
+        .unwrap_or_else(|| base.join("Apps"));
+    let mut out = Vec::new();
+    for file in ["apps.json", "games.json"] {
+        let Some(v) = read(file) else { continue };
+        let mut entries: Vec<&serde_json::Value> = Vec::new();
+        for sec in ["apps", "standard", "experimental", "custom"] {
+            if let Some(a) = v[sec].as_array() {
+                entries.extend(a.iter());
+            }
+        }
+        if let Some(a) = v.as_array() {
+            entries.extend(a.iter());
+        }
+        for e in entries {
+            let name = e["name"].as_str().unwrap_or_default().to_string();
+            let path = match e["installPath"].as_str().filter(|s| !s.trim().is_empty()) {
+                Some(p) => PathBuf::from(p),
+                None => match e["folderName"].as_str().filter(|s| !s.trim().is_empty()) {
+                    Some(f) => apps_dir.join(f),
+                    None => continue,
+                },
+            };
+            // Only apps that are actually installed.
+            if path.is_dir() && !out.iter().any(|(_, p): &(String, PathBuf)| p == &path) {
+                out.push((name, path));
+            }
+        }
+        if !out.is_empty() {
+            break;
         }
     }
     out

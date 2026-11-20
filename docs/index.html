@@ -118,7 +118,7 @@ footer{color:#6f7d75;font-size:13px;padding:30px 0 50px;border-top:1px solid var
     <h2>What it does</h2>
     <p class="lead">The demo above is a rough browser copy of the look. The real app runs natively on Windows (written in Rust), follows your monitor's refresh rate, and works with a controller.</p>
     <div class="grid">
-      <div class="card"><h3><i></i>Eleven consoles</h3><p>Xbox 360, Xbox, PS3, PS2, PS1, PSP, Switch, GameCube, N64, DS and 3DS. Each console gets its own channel.</p></div>
+      <div class="card"><h3><i></i>Eleven consoles + PC ports</h3><p>Xbox 360, Xbox, PS3, PS2, PS1, PSP, Switch, GameCube, N64, DS and 3DS, each with its own channel, plus a PC Ports channel for native recompilations.</p></div>
       <div class="card"><h3><i></i>Smooth handoff</h3><p>The game tile zooms in, the emulator opens fullscreen, and the dashboard waits. Press Guide (or hold Back + Start) to close the game and slide back in.</p></div>
       <div class="card"><h3><i></i>Uses your emulators</h3><p>Point it at Xenia, RPCS3, PCSX2, Dolphin, PPSSPP, DuckStation, Eden, Ryujinx, melonDS, Azahar, xemu… Emulators next to the launcher are found automatically.</p></div>
       <div class="card"><h3><i></i>Built-in cores, only if you ask</h3><p>No emulator for a console? You can download a libretro core in one step. Nothing is downloaded unless you choose to.</p></div>
@@ -157,6 +157,7 @@ footer{color:#6f7d75;font-size:13px;padding:30px 0 50px;border-top:1px solid var
       <tr><td>Nintendo 64</td><td>RMG, simple64, Project64<span class="core">core</span></td><td>Z64, N64, V64</td></tr>
       <tr><td>Nintendo DS</td><td>melonDS<span class="core">core</span></td><td>NDS</td></tr>
       <tr><td>Nintendo 3DS</td><td>Azahar, Lime3DS, Citra<span class="core">core</span></td><td>3DS, CCI, CXI, 3DSX (decrypted)</td></tr>
+      <tr><td>PC Ports</td><td>None needed (optional: GitHub Launcher import)</td><td>Native recomps &amp; ports: Zelda 64: Recompiled, Starship, Ship of Harkinian…</td></tr>
     </table>
   </section>
 
@@ -486,7 +487,7 @@ function frame(ms){
   if(da>0){ zoom(1+0.09*pa); g.globalAlpha=da; if(S.intro!==null) dashboard(th,t); g.globalAlpha=1; }
   if(pa>0.01){ const sub=lerp(S.subFrom,1,clamp(S.subAnim,0,1)); zoom((0.9+0.1*pa)*sub); settingsPage(th,t,Math.pow(clamp(pa,0,1),0.8)); }
   g.setTransform(1,0,0,1,0,0);
-  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.8.1",W-22,H-16); g.globalAlpha=1; }
+  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.9.0",W-22,H-16); g.globalAlpha=1; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
