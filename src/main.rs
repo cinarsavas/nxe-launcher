@@ -143,6 +143,8 @@ pub struct App {
     last_top: Option<String>,
     last_page: Option<String>,
     pub user_pics: Vec<(String, egui::TextureHandle)>,
+    /// Picked the RetroAchievements picture before signing in: use it once sign-in works.
+    pub ra_pic_pending: bool,
     last_paint: Instant,
     ctx_handle: Option<egui::Context>,
 }
@@ -244,11 +246,13 @@ impl App {
             last_top: None,
             last_page: None,
             user_pics: vec![],
+            ra_pic_pending: false,
             last_paint: Instant::now(),
             ctx_handle: Some(cc.egui_ctx.clone()),
         };
         app.reload_custom_pic_ctx(&cc.egui_ctx);
         app.user_pics = profile::load_user_pics(&cc.egui_ctx);
+        app.load_cached_ra_avatar(&cc.egui_ctx);
         app.theme_from = scene::theme(&app.cfg.theme);
         if !setup {
             app.intro = Some(Instant::now());
@@ -511,6 +515,12 @@ impl App {
         self.custom_pic_tex.as_ref().map(|t| t.id())
     }
 
+    fn load_cached_ra_avatar(&mut self, ctx: &egui::Context) {
+        if self.ra_signed_in() {
+            self.ra_avatar_tex = std::fs::read(theme_dir().join("cache").join("ra_avatar.png")).ok().and_then(|b| load_tex(ctx, "ra_avatar", &b));
+        }
+    }
+
     fn reload_custom_pic_ctx(&mut self, ctx: &egui::Context) {
         self.custom_pic_tex = std::fs::read(theme_dir().join("profile.png")).ok().and_then(|b| {
             let img = image::load_from_memory(&b).ok()?.to_rgba8();
@@ -584,6 +594,10 @@ impl App {
     }
 
     pub fn ra_logout(&mut self) {
+        let _ = std::fs::remove_file(theme_dir().join("cache").join("ra_avatar.png"));
+        if self.cfg.gamerpic == "ra" {
+            self.cfg.gamerpic = "builtin:0".into();
+        }
         self.cfg.ra_token.clear();
         self.cfg.save();
         self.ra_points_val = None;
@@ -633,11 +647,23 @@ impl App {
                 ra::Msg::Profile { points, pic } => {
                     self.ra_points_val = Some(points);
                     self.ra_status = Some(format!("Signed in as {} · {points} points", self.cfg.ra_user));
-                    self.ra_avatar_tex = pic.and_then(|b| {
-                        let img = image::load_from_memory(&b).ok()?.to_rgba8();
-                        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-                        Some(ctx.load_texture("ra_avatar", ci, egui::TextureOptions::LINEAR))
-                    });
+                    if let Some(b) = &pic {
+                        // Keep a copy so the picture also shows offline and right at startup.
+                        if image::load_from_memory(b).is_ok() {
+                            let _ = std::fs::write(theme_dir().join("cache").join("ra_avatar.png"), b);
+                        }
+                    }
+                    if let Some(t) = pic.and_then(|b| load_tex(ctx, "ra_avatar", &b)) {
+                        self.ra_avatar_tex = Some(t);
+                    }
+                    if self.ra_pic_pending {
+                        self.ra_pic_pending = false;
+                        if self.ra_avatar_tex.is_some() {
+                            self.cfg.gamerpic = "ra".into();
+                            self.cfg.save();
+                            self.toast("Gamerpic: your RetroAchievements picture");
+                        }
+                    }
                 }
                 ra::Msg::Library { sets } => {
                     self.ra_sets = sets;
@@ -1297,6 +1323,12 @@ pub fn open_path(p: &std::path::Path) {
     let _ = Command::new("notepad.exe").arg(p).spawn();
     #[cfg(not(windows))]
     let _ = Command::new("xdg-open").arg(p).spawn();
+}
+
+fn load_tex(ctx: &egui::Context, name: &str, bytes: &[u8]) -> Option<egui::TextureHandle> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+    Some(ctx.load_texture(name, ci, egui::TextureOptions::LINEAR))
 }
 
 #[allow(deprecated)]

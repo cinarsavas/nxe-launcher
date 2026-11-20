@@ -283,7 +283,7 @@ pub struct PicPicker {
 /// Picker entries: built-ins, then pictures from theme\gamerpics, then "your own picture",
 /// then the RetroAchievements picture if signed in.
 fn entries(app: &App) -> usize {
-    BUILTIN + app.user_pics.len() + 1 + usize::from(app.ra_avatar().is_some())
+    BUILTIN + app.user_pics.len() + 2
 }
 
 #[derive(PartialEq)]
@@ -332,6 +332,14 @@ pub fn load_user_pics(ctx: &egui::Context) -> Vec<(String, egui::TextureHandle)>
             Some((format!("{key}\u{0}{name}"), ctx.load_texture(format!("upic_{key}"), ci, egui::TextureOptions::LINEAR)))
         })
         .collect()
+}
+
+/// Tile shown for the RetroAchievements picture before it's available.
+fn ra_placeholder(p: &egui::Painter, r: Rect, a: f32, u: f32) {
+    p.add(grad(r, Color32::from_rgb(40, 52, 92).gamma_multiply(a), Color32::from_rgb(14, 18, 38).gamma_multiply(a)));
+    crate::scene::icon_pub(p, crate::Icon::Trophy, r.center() - vec2(0.0, r.height() * 0.08), r.width() * 0.26, Color32::from_rgb(240, 200, 80).gamma_multiply(a));
+    let fs = (r.width() * 0.12).clamp(9.0 * u, 18.0 * u);
+    p.text(pos2(r.center().x, r.bottom() - r.height() * 0.16), Align2::CENTER_CENTER, "Sign In", FontId::proportional(fs), Color32::WHITE.gamma_multiply(a));
 }
 
 fn split_key(k: &str) -> (&str, &str) {
@@ -408,9 +416,24 @@ impl App {
                         self.choose_custom_picture(frame, ctx);
                         return;
                     }
-                    Entry::Ra => {
+                    Entry::Ra if self.ra_avatar().is_some() => {
                         self.cfg.gamerpic = "ra".into();
-                        self.toast("Using your RetroAchievements picture");
+                        self.toast("Gamerpic: your RetroAchievements picture");
+                    }
+                    Entry::Ra => {
+                        // Not signed in (or picture not loaded yet): go sign in, then it's applied.
+                        self.ra_pic_pending = true;
+                        self.pic_picker = None;
+                        if self.ra_signed_in() {
+                            self.ra_refresh();
+                            self.toast("Loading your RetroAchievements picture…");
+                        } else if self.menu.as_ref().map(|m| m.kind == crate::menu::Kind::Setup).unwrap_or(false) {
+                            self.toast("Sign in under Settings > Achievements after setup");
+                        } else {
+                            self.menu = Some(crate::menu::Menu::achievements());
+                            self.toast("Sign in and your RetroAchievements picture is used");
+                        }
+                        return;
                     }
                 }
                 self.cfg.save();
@@ -485,6 +508,8 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             Entry::Ra => {
                 if let Some(t) = app.ra_avatar() {
                     p.image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+                } else {
+                    ra_placeholder(&p, r, a, u);
                 }
             }
         }
@@ -494,7 +519,11 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         Entry::Builtin(n) => (NAMES[n].to_string(), format!("Built-in gamerpic {} of {}", n + 1, BUILTIN)),
         Entry::File(n) => (split_key(&app.user_pics[n].0).1.to_string(), "From your theme\\gamerpics folder".into()),
         Entry::Own => ("Your Picture".into(), "Choose any image, then move and zoom it to fit.".into()),
-        Entry::Ra => ("RetroAchievements".into(), "Your RetroAchievements profile picture.".into()),
+        Entry::Ra if app.ra_avatar().is_some() => ("RetroAchievements".into(), format!("The profile picture of {} on retroachievements.org.", app.cfg.ra_user)),
+        Entry::Ra => (
+            "RetroAchievements".into(),
+            "Use your retroachievements.org profile picture. Press A to sign in first; the picture is used as soon as you're signed in.".into(),
+        ),
     };
     let tx = x0 + grid_w + 30.0 * u;
     let side = (f.panel.right() - tx - 30.0 * u).min(170.0 * u);
@@ -507,6 +536,8 @@ pub fn draw_pic_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         Entry::Ra => {
             if let Some(t) = app.ra_avatar() {
                 p.image(t, big, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+            } else {
+                ra_placeholder(&p, big, a, u);
             }
         }
         Entry::Own => {

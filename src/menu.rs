@@ -81,6 +81,7 @@ pub enum RowId {
     CustomPic,
     FrameRate,
     ShowVersion,
+    RaUsePic,
     Backend(System),
     InstallCore(System),
     Continue,
@@ -147,6 +148,15 @@ fn cap(s: &str) -> String {
 }
 
 impl Menu {
+    /// Settings opened straight on the Achievements (sign-in) page.
+    pub fn achievements() -> Self {
+        let mut m = Self::new(Kind::Settings);
+        m.cat = CAT_ACH;
+        m.in_list = true;
+        m.row = 0;
+        m
+    }
+
     pub fn new(kind: Kind) -> Self {
         Self { kind, cat: 0, row: 0, in_list: kind == Kind::Setup, edit: None, opened: Instant::now(), scroll: 0, bar: 0.0, bar_vel: 0.0, last_frame: Instant::now(), closing: None, console: None }
     }
@@ -240,6 +250,9 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                         app.ra_status.clone().unwrap_or_default(),
                     ));
                     v.push(Row::new(RowId::RaRefresh, "Refresh", Value::Action, "Reload your points and progress."));
+                    if app.ra_avatar().is_some() && cfg.gamerpic != "ra" {
+                        v.push(Row::new(RowId::RaUsePic, "Use My RetroAchievements Picture", Value::Action, "Make your retroachievements.org profile picture your gamerpic."));
+                    }
                     v.push(Row::new(RowId::RaSignOut, "Sign Out", Value::Action, "Forget the saved sign-in on this PC."));
                 } else {
                     v.push(Row::note("Sign in with your retroachievements.org account, the same username and password you use on the website."));
@@ -568,6 +581,11 @@ impl App {
             }
             RowId::Gamerpic => self.open_pic_picker(),
             RowId::CustomPic => self.choose_custom_picture(frame, ctx),
+            RowId::RaUsePic => {
+                self.cfg.gamerpic = "ra".into();
+                self.cfg.save();
+                self.toast("Gamerpic: your RetroAchievements picture");
+            }
             RowId::ShowVersion => {
                 self.cfg.show_version = !self.cfg.show_version;
                 self.cfg.save();

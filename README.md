@@ -65,7 +65,7 @@ Press **Start** (Tab on the keyboard) anywhere. The categories are:
   - **Graphics:** resolution, aspect ratio, VSync, start fullscreen. These are written straight into the emulator's own settings file for PCSX2, Dolphin, DuckStation, PPSSPP, Xenia and xemu, and the original file is backed up as `*.nxe-backup`.
   - **Controls & More Settings:** opens the emulator itself
   - **Game folders** and **Launch Options**
-- **Profile:** gamertag (typed right in the row) and gamerpic. Pick one of the 18 built-in gamerpics (Controller, Superstar, Lightning, Heart, Diamond, Night Owl, Ringworld, Encore, Royalty, Paw Print, Cube, Bloom, Liftoff, Boo, Ember, Summit, Tide, Halo Ring), one from your `theme\gamerpics` folder, or your own picture moved/zoomed to fit.
+- **Profile:** gamertag (typed right in the row) and gamerpic. Pick one of the 18 built-in gamerpics (Controller, Superstar, Lightning, Heart, Diamond, Night Owl, Ringworld, Encore, Royalty, Paw Print, Cube, Bloom, Liftoff, Boo, Ember, Summit, Tide, Halo Ring), one from your `theme\gamerpics` folder, your RetroAchievements profile picture (pick the trophy tile; it sends you to sign in if you aren't yet), or your own picture moved/zoomed to fit.
 - **Display:** theme, animation frame rate (Match Display, or a 240/144/120/60/30 FPS cap), fullscreen, sounds, Show Version Number (off by default)
 - **Cover Art**, **Achievements** (username, password, Sign In), **About**
 
