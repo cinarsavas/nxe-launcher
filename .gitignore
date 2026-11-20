@@ -1,0 +1,5 @@
+/target
+*.nxe-backup
+nxe-launcher.toml
+/theme/
+/runtime/

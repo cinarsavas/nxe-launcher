@@ -1,0 +1,25 @@
+[package]
+name = "nxe-launcher"
+version = "0.8.0"
+license = "MIT"
+repository = "https://github.com/cinarsavas/nxe-launcher"
+edition = "2021"
+description = "Fullscreen 2008-style console dashboard that launches games on your emulators"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+gilrs = "0.11"
+rfd = "0.18"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+chrono = "0.4"
+ureq = "3.5.2"
+serde_json = "1.0.154"
+sevenz-rust2 = { version = "0.25.0", default-features = false, features = ["util"] }
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

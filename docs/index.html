@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NXE Launcher: a 2008-style console dashboard for your emulators</title>
+<meta name="description" content="A fullscreen, controller-first dashboard in the style of the 2008 NXE dashboard. Launches games on Xenia, RPCS3, PCSX2, Dolphin, PPSSPP, DuckStation and more. Try it in your browser.">
+<meta property="og:title" content="NXE Launcher">
+<meta property="og:description" content="A 2008-style console dashboard for your emulators. Try the live demo in your browser.">
+<meta property="og:image" content="img/setup.jpg">
+<style>
+:root{
+  --bg:#0d1210; --panel:#151c19; --line:#25302b; --text:#e8eee9; --dim:#9aa8a0;
+  --accent:#7cc433; --accent2:#a6e05a;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 "Segoe UI",system-ui,-apple-system,Ubuntu,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent2);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+header.top{display:flex;align-items:center;justify-content:space-between;padding:18px 0}
+.logo{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.2px}
+.logo i{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#d4ff9a,#6bb52a 45%,#2f6a12);box-shadow:0 0 18px #7cc43366}
+nav a{color:var(--dim);margin-left:22px;font-size:15px}
+nav a:hover{color:var(--text);text-decoration:none}
+.hero{padding:34px 0 16px;text-align:center}
+.hero h1{font-size:clamp(34px,5.4vw,60px);line-height:1.08;margin:0 0 14px;font-weight:600;letter-spacing:-.5px}
+.hero h1 span{background:linear-gradient(90deg,#b9f06e,#6cc12d);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--dim);font-size:clamp(16px,2vw,19px);max-width:720px;margin:0 auto 26px}
+.btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:12px 22px;border-radius:6px;font-weight:600;font-size:16px;border:1px solid var(--line);color:var(--text);background:#18211d;transition:transform .15s,background .15s}
+.btn:hover{text-decoration:none;transform:translateY(-1px);background:#1e2924}
+.btn.primary{background:linear-gradient(#8fd444,#5fa625);border-color:#8fd444;color:#0b1406;box-shadow:0 6px 24px #7cc43333}
+.btn.primary:hover{background:linear-gradient(#9de052,#68b32b)}
+.btn small{font-weight:400;opacity:.75}
+
+/* demo */
+.demo{margin:34px auto 10px;max-width:1180px}
+.screen{position:relative;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000;box-shadow:0 30px 80px #000a,0 0 0 1px #2a3530;outline:none;cursor:pointer}
+.screen canvas{width:100%;height:100%;display:block}
+.screen .focus{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0007;color:#fff;font-size:18px;transition:opacity .25s;pointer-events:none}
+.screen:focus .focus,.screen.active .focus{opacity:0}
+.focus b{padding:10px 18px;border-radius:30px;background:#000a;border:1px solid #fff3}
+.pad{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:14px;flex-wrap:wrap}
+.keys{color:var(--dim);font-size:14px}
+kbd{display:inline-block;min-width:22px;padding:1px 7px;margin:0 2px;border-radius:4px;background:#1b2420;border:1px solid #2c3833;border-bottom-width:2px;font:12px/1.6 ui-monospace,Consolas,monospace;color:var(--text);text-align:center}
+.vpad{display:flex;gap:8px;align-items:center}
+.vpad button{width:46px;height:46px;border-radius:50%;border:1px solid #33403a;background:#18211d;color:var(--text);font:600 15px inherit;cursor:pointer;touch-action:manipulation}
+.vpad button:active{transform:scale(.94)}
+.vpad .a{background:#3d8a1e;border-color:#5bb22e}
+.vpad .b{background:#a32a22;border-color:#d0463a}
+.vpad .st{width:auto;border-radius:20px;padding:0 14px;font-size:12px;letter-spacing:.5px}
+.vpad .gap{width:10px}
+
+section{padding:70px 0 10px}
+h2{font-size:clamp(26px,3.4vw,36px);margin:0 0 8px;font-weight:600;letter-spacing:-.3px}
+.lead{color:var(--dim);margin:0 0 30px;max-width:720px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 20px 18px}
+.card h3{margin:0 0 6px;font-size:17px;display:flex;align-items:center;gap:9px}
+.card h3 i{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.card p{margin:0;color:var(--dim);font-size:15px}
+.shots{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.shots figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.shots img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover}
+.shots figcaption{padding:10px 14px;color:var(--dim);font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:15px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.6px;background:#121916}
+tr:last-child td{border-bottom:0}
+td .core{display:inline-block;margin-left:6px;padding:0 7px;border-radius:10px;font-size:12px;background:#24361a;color:var(--accent2)}
+.cta{margin:80px 0 40px;padding:44px 24px;text-align:center;border-radius:14px;background:radial-gradient(ellipse at top,#2f5a17,#13200e 70%);border:1px solid #2c4a1d}
+.cta h2{margin-bottom:10px}
+.cta p{color:#c4d6bb;margin:0 0 22px}
+footer{color:#6f7d75;font-size:13px;padding:30px 0 50px;border-top:1px solid var(--line);margin-top:40px}
+@media (max-width:760px){.shots{grid-template-columns:1fr}nav{display:none}.pad{justify-content:center}.keys{display:none}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo"><i></i>NXE Launcher</div>
+    <nav><a href="#demo">Demo</a><a href="#features">Features</a><a href="#consoles">Consoles</a><a href="https://github.com/cinarsavas/nxe-launcher">GitHub</a></nav>
+  </header>
+
+  <div class="hero">
+    <h1>Your emulators,<br><span>behind one dashboard.</span></h1>
+    <p>NXE Launcher is a fullscreen, controller-first front end in the style of the 2008 NXE dashboard. Pick a game and it opens in the right emulator. Close the game and you're back on the dashboard.</p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/cinarsavas/nxe-launcher/releases/latest">Download for Windows <small>x64 · free</small></a>
+      <a class="btn" href="#demo">Try it here first</a>
+    </div>
+  </div>
+
+  <div class="demo" id="demo">
+    <div class="screen" id="screen" tabindex="0" aria-label="Interactive dashboard demo. Use the arrow keys, Enter, Escape and Tab.">
+      <canvas id="c" width="1280" height="720"></canvas>
+      <div class="focus"><b>Click to use the keyboard</b></div>
+    </div>
+    <div class="pad">
+      <div class="keys"><kbd>↑</kbd><kbd>↓</kbd> channels &nbsp; <kbd>←</kbd><kbd>→</kbd> games &nbsp; <kbd>Enter</kbd> play &nbsp; <kbd>Tab</kbd> settings &nbsp; <kbd>Esc</kbd> back</div>
+      <div class="vpad" aria-label="On-screen controller">
+        <button data-k="left" aria-label="Left">◀</button>
+        <button data-k="up" aria-label="Up">▲</button>
+        <button data-k="down" aria-label="Down">▼</button>
+        <button data-k="right" aria-label="Right">▶</button>
+        <span class="gap"></span>
+        <button class="st" data-k="start">START</button>
+        <button class="b" data-k="b">B</button>
+        <button class="a" data-k="a">A</button>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <h2>What it does</h2>
+    <p class="lead">The demo above is a rough browser copy of the look. The real app runs natively on Windows (written in Rust), follows your monitor's refresh rate, and works with a controller.</p>
+    <div class="grid">
+      <div class="card"><h3><i></i>Eleven consoles</h3><p>Xbox 360, Xbox, PS3, PS2, PS1, PSP, Switch, GameCube, N64, DS and 3DS. Each console gets its own channel.</p></div>
+      <div class="card"><h3><i></i>Smooth handoff</h3><p>The game tile zooms in, the emulator opens fullscreen, and the dashboard waits. Press Guide (or hold Back + Start) to close the game and slide back in.</p></div>
+      <div class="card"><h3><i></i>Uses your emulators</h3><p>Point it at Xenia, RPCS3, PCSX2, Dolphin, PPSSPP, DuckStation, Eden, Ryujinx, melonDS, Azahar, xemu… Emulators next to the launcher are found automatically.</p></div>
+      <div class="card"><h3><i></i>Built-in cores, only if you ask</h3><p>No emulator for a console? You can download a libretro core in one step. Nothing is downloaded unless you choose to.</p></div>
+      <div class="card"><h3><i></i>Cover art, automatically</h3><p>Covers are found by disc ID or serial where possible, by name otherwise. Don't like a cover? Pick another one.</p></div>
+      <div class="card"><h3><i></i>RetroAchievements</h3><p>Sign in with your normal username and password. Your points and per-game progress show on the dashboard.</p></div>
+      <div class="card"><h3><i></i>Emulator settings in one place</h3><p>Change resolution, aspect ratio and VSync for PCSX2, Dolphin, DuckStation, PPSSPP, Xenia and xemu from the dashboard. The original settings file is backed up first.</p></div>
+      <div class="card"><h3><i></i>Gamerpics &amp; themes</h3><p>18 built-in gamerpics, your own pictures with a move-and-zoom crop, and five colour themes that fade into each other.</p></div>
+      <div class="card"><h3><i></i>Motion that feels right</h3><p>Spring physics everywhere, an intro fly-in, and pages that zoom open the way a console menu does.</p></div>
+    </div>
+  </section>
+
+  <section id="shots">
+    <h2>Inside the app</h2>
+    <p class="lead">Real screenshots. Everything can be done with a controller, a keyboard or a mouse.</p>
+    <div class="shots">
+      <figure><img src="img/setup.jpg" alt="Quick Setup, gamerpic step" loading="lazy"><figcaption>Quick Setup on first launch: name, gamerpic, emulators, cover art.</figcaption></figure>
+      <figure><img src="img/gamerpics.jpg" alt="Gamerpic picker" loading="lazy"><figcaption>Pick a built-in gamerpic, one from your own folder, or crop any picture.</figcaption></figure>
+      <figure><img src="img/settings.jpg" alt="Settings" loading="lazy"><figcaption>Settings use the slate-panel style of the era. No text files to edit.</figcaption></figure>
+      <figure><img src="img/display.jpg" alt="Display settings" loading="lazy"><figcaption>Theme, frame-rate cap, fullscreen, sounds, version number.</figcaption></figure>
+    </div>
+  </section>
+
+  <section id="consoles">
+    <h2>Consoles &amp; emulators</h2>
+    <p class="lead">You bring the emulator and your own legally dumped games. <span class="core" style="display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;background:#24361a;color:#a6e05a">core</span> means a built-in core can be downloaded as an alternative.</p>
+    <table>
+      <tr><th>Console</th><th>Emulators</th><th>Games</th></tr>
+      <tr><td>Xbox 360</td><td>Xenia Canary / Edge<span class="core">core</span></td><td>ISO, ZAR, XEX, GOD / Arcade packages</td></tr>
+      <tr><td>Xbox</td><td>xemu<span class="core">core</span></td><td>XISO</td></tr>
+      <tr><td>PlayStation 3</td><td>RPCS3<span class="core">core</span></td><td>Disc folders, installed games, ISO</td></tr>
+      <tr><td>PlayStation 2</td><td>PCSX2<span class="core">core</span></td><td>ISO, CHD, CSO, ZSO, CUE</td></tr>
+      <tr><td>PlayStation</td><td>DuckStation<span class="core">core</span></td><td>CUE, CHD, PBP, M3U</td></tr>
+      <tr><td>PSP</td><td>PPSSPP<span class="core">core</span></td><td>ISO, CSO, CHD, PBP</td></tr>
+      <tr><td>Switch</td><td>Eden, Citron, Sudachi, yuzu, Ryujinx / Ryubing</td><td>NSP, XCI, NSZ, XCZ</td></tr>
+      <tr><td>GameCube</td><td>Dolphin<span class="core">core</span></td><td>ISO, RVZ, GCZ, CISO, WBFS</td></tr>
+      <tr><td>Nintendo 64</td><td>RMG, simple64, Project64<span class="core">core</span></td><td>Z64, N64, V64</td></tr>
+      <tr><td>Nintendo DS</td><td>melonDS<span class="core">core</span></td><td>NDS</td></tr>
+      <tr><td>Nintendo 3DS</td><td>Azahar, Lime3DS, Citra<span class="core">core</span></td><td>3DS, CCI, CXI, 3DSX (decrypted)</td></tr>
+    </table>
+  </section>
+
+  <div class="cta">
+    <h2>Like the feel?</h2>
+    <p>Windows 10 / 11, 64-bit. Unzip and run. No installer, and it doesn't touch the registry.</p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/cinarsavas/nxe-launcher/releases/latest">Download the latest release</a>
+      <a class="btn" href="https://github.com/cinarsavas/nxe-launcher">Source code</a>
+    </div>
+  </div>
+
+  <footer>
+    NXE Launcher is a fan project. It is not affiliated with or endorsed by Microsoft, Sony or Nintendo; all trademarks belong to their owners.
+    It ships no games, BIOS files, keys or official artwork. The games and covers in the demo are made up.
+    MIT licensed.
+  </footer>
+</div>
+
+<script>
+(() => {
+"use strict";
+const cv = document.getElementById("c"), g = cv.getContext("2d");
+const scr = document.getElementById("screen");
+const W = 1280, H = 720;
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// ---------- data (fictional games, generated covers)
+const THEMES = {
+  Green:  {top:[36,92,12], mid:[118,176,30], glow:[226,236,96], bar:[118,190,40]},
+  Blue:   {top:[10,46,104], mid:[38,120,206], glow:[140,214,255], bar:[60,140,230]},
+  Orange: {top:[120,40,6], mid:[226,116,22], glow:[255,214,120], bar:[236,130,30]},
+  Purple: {top:[52,18,92], mid:[136,64,196], glow:[236,170,255], bar:[150,80,210]},
+  Black:  {top:[8,8,10], mid:[52,56,62], glow:[150,160,170], bar:[110,120,130]},
+};
+const THEME_NAMES = Object.keys(THEMES);
+const mk = (t, c1, c2, sym) => ({t, c1, c2, sym});
+const CHANNELS = [
+  {name:"Xbox 360", tiles:[mk("Starfall Racers","#e8603c","#5a1a7a","star"), mk("Hollow Keep","#2d3d55","#9ab6c8","moon"), mk("Tidebreaker","#1381c4","#0b2a5a","wave"), mk("Ember Run","#ff9a2e","#8a1d10","flame"), mk("Iron Summit","#5d6f7d","#202a33","mount"), mk("Neon Drift","#e83cbc","#2a0a5a","bolt")]},
+  {name:"PlayStation 2", tiles:[mk("Paper Knights","#e7d7a6","#6b4a2a","crown"), mk("Skyline Tag","#35c0d8","#174a8a","bolt"), mk("Moss & Moon","#4fa35a","#123520","moon"), mk("Garden Panic","#f07ab0","#7a1b52","flower"), mk("Cold Signal","#9ec7e8","#2b4060","ring")]},
+  {name:"GameCube", tiles:[mk("Pocket Planet","#7c5cd6","#24125a","planet"), mk("Boo Mansion","#7b8fa6","#262c40","ghost"), mk("Rally Pups","#f2b63c","#9a4b10","paw"), mk("Crystal Lane","#55e0d0","#106070","diamond")]},
+  {name:"PlayStation 3", tiles:[mk("Afterglow","#ff7b54","#3a0f3f","star"), mk("Deep Orbit","#2350a8","#060c2a","planet"), mk("Last Train","#a3a3a3","#2a2a2a","ring")]},
+  {name:"Switch", tiles:[mk("Puff Island","#ff6f61","#ffd36e","flower"), mk("Cube Craft Kart","#3cc77a","#0d5e3a","cube"), mk("Liftoff!","#3a8ee6","#0a2a6a","rocket"), mk("Echo Hollow","#8a6be6","#2a1a5a","note")]},
+  {name:"Home", tiles:[mk("Recent: Starfall Racers","#e8603c","#5a1a7a","star"), mk("Recent: Puff Island","#ff6f61","#ffd36e","flower")]},
+];
+const SETTINGS = [
+  {name:"Theme", val:()=>S.themeName, desc:"Colour of the dashboard. Press A to switch.", act:()=>{ const i=(THEME_NAMES.indexOf(S.themeName)+1)%THEME_NAMES.length; setTheme(THEME_NAMES[i]); }},
+  {name:"Animation Frame Rate", val:()=>"Match Display", desc:"The app renders at your monitor's refresh rate, or a cap you pick (240/144/120/60/30)."},
+  {name:"Gamerpic", val:()=>PICS[S.pic].n, desc:"18 built-in gamerpics, your own folder of pictures, or any image cropped to fit. Press A to cycle.", act:()=>{S.pic=(S.pic+1)%PICS.length}},
+  {name:"Menu Sounds", val:()=>"On", desc:"Plays theme\\sounds\\*.wav when you move around."},
+  {name:"Show Version Number", val:()=>S.ver?"On":"Off", desc:"Shows the launcher version in the bottom-right corner.", act:()=>{S.ver=!S.ver}},
+  {name:"Consoles", val:()=>"", desc:"In the app: one page per console with the emulator, built-in core, graphics options and game folders."},
+];
+const PICS = [{n:"Ringworld",sym:"planet",c1:"#f0a060",c2:"#a03a8a"},{n:"Superstar",sym:"star",c1:"#ffb03a",c2:"#d0661a"},{n:"Night Owl",sym:"moon",c1:"#4a4ab0",c2:"#1a1a50"},{n:"Liftoff",sym:"rocket",c1:"#58b8ff",c2:"#1a4aa0"},{n:"Boo",sym:"ghost",c1:"#8a6ae0",c2:"#3a2a80"}];
+
+// ---------- state
+const S = {
+  chan:0, chanPos:0, chanAnim:0, chanVel:0,
+  sel:CHANNELS.map(()=>0), anim:CHANNELS.map(()=>0), vel:CHANNELS.map(()=>0),
+  themeName:"Green", themeFrom:null, themeT:1,
+  page:false, pageAnim:0, pageVel:0, row:0, bar:0, barVel:0, subFrom:1, subAnim:1, subVel:0,
+  launch:null, playing:null, ret:null, toast:null, intro:null, pic:0, ver:false, t0:performance.now(),
+};
+const now = () => (performance.now()-S.t0)/1000;
+
+// ---------- helpers
+const lerp=(a,b,t)=>a+(b-a)*t, clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const ease=t=>1-Math.pow(1-clamp(t,0,1),3);
+const seg=(t,s,d)=>ease((t-s)/d);
+const rgb=(c,a=1)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+const mix=(a,b,t)=>a.map((v,i)=>lerp(v,b[i],t));
+function themeNow(){
+  const to=THEMES[S.themeName]; if(!S.themeFrom) return to;
+  const t=ease(S.themeT), f=S.themeFrom; const o={}; for(const k in to) o[k]=mix(f[k],to[k],t); return o;
+}
+function setTheme(n){ S.themeFrom=themeNow(); S.themeName=n; S.themeT=0; }
+function spring(o,k,vk,target,w,dt){
+  const steps=Math.max(1,Math.ceil(dt*480)), h=dt/steps;
+  for(let i=0;i<steps;i++){ const acc=w*w*(target-o[k])-2*w*o[vk]; o[vk]+=acc*h; o[k]+=o[vk]*h; }
+}
+function springArr(arr,varr,i,target,w,dt){ const o={x:arr[i],v:varr[i]}; spring(o,"x","v",target,w,dt); arr[i]=o.x; varr[i]=o.v; }
+
+// ---------- symbols (simple vector shapes, same family as the app's gamerpics)
+function symbol(sym,cx,cy,r,col){
+  g.save(); g.fillStyle=col; g.strokeStyle=col; g.lineWidth=r*0.16; g.lineCap="round";
+  g.beginPath();
+  switch(sym){
+    case "star": for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5, rr=i%2?r*0.42:r; g.lineTo(cx+Math.cos(a)*rr,cy+Math.sin(a)*rr);} g.fill(); break;
+    case "moon": g.arc(cx,cy,r,0,7); g.clip(); g.beginPath(); g.rect(cx-r,cy-r,r*2,r*2); g.arc(cx+r*0.45,cy-r*0.3,r*0.85,0,7); g.fill("evenodd"); break;
+    case "wave": for(let k=-1;k<=1;k++){g.beginPath(); for(let x=-1;x<=1.001;x+=0.05) g.lineTo(cx+x*r,cy+k*r*0.5+Math.sin(x*Math.PI*1.5)*r*0.14); g.stroke();} break;
+    case "flame": g.moveTo(cx,cy-r); g.bezierCurveTo(cx+r*0.9,cy-r*0.1,cx+r*0.8,cy+r,cx,cy+r); g.bezierCurveTo(cx-r*0.8,cy+r,cx-r*0.9,cy-r*0.1,cx,cy-r); g.fill(); break;
+    case "mount": g.moveTo(cx-r,cy+r*0.7); g.lineTo(cx-r*0.2,cy-r*0.6); g.lineTo(cx+r*0.25,cy+r*0.05); g.lineTo(cx+r*0.5,cy-r*0.25); g.lineTo(cx+r,cy+r*0.7); g.fill(); break;
+    case "bolt": [[0.25,-1],[-0.45,0.1],[0,0.1],[-0.25,1],[0.45,-0.15],[0,-0.15]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); break;
+    case "crown": [[-1,0.6],[-1,-0.5],[-0.5,0],[0,-0.75],[0.5,0],[1,-0.5],[1,0.6]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); break;
+    case "flower": for(let i=0;i<5;i++){const a=i*Math.PI*0.4; g.beginPath(); g.arc(cx+Math.cos(a)*r*0.5,cy+Math.sin(a)*r*0.5,r*0.45,0,7); g.fill();} g.fillStyle="#ffd34a"; g.beginPath(); g.arc(cx,cy,r*0.3,0,7); g.fill(); break;
+    case "ring": g.lineWidth=r*0.3; g.arc(cx,cy,r*0.75,0,7); g.stroke(); break;
+    case "planet": g.arc(cx,cy,r*0.6,0,7); g.fill(); g.beginPath(); g.lineWidth=r*0.14; g.ellipse(cx,cy,r*1.1,r*0.32,-0.25,0,7); g.stroke(); break;
+    case "ghost": g.arc(cx,cy-r*0.15,r*0.75,Math.PI,0); g.lineTo(cx+r*0.75,cy+r*0.8); for(let i=0;i<=4;i++) g.lineTo(cx+r*0.75-i*r*0.375,cy+r*(i%2?0.55:0.8)); g.fill(); break;
+    case "paw": g.arc(cx,cy+r*0.3,r*0.48,0,7); g.fill(); [[-0.62,-0.25],[-0.22,-0.65],[0.22,-0.65],[0.62,-0.25]].forEach(([x,y])=>{g.beginPath(); g.arc(cx+x*r,cy+y*r,r*0.2,0,7); g.fill();}); break;
+    case "diamond": [[-1,-0.3],[-0.5,-0.8],[0.5,-0.8],[1,-0.3],[0,1]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); break;
+    case "cube": [[0,-1],[0.9,-0.5],[0.9,0.5],[0,1],[-0.9,0.5],[-0.9,-0.5]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); break;
+    case "rocket": g.ellipse(cx,cy-r*0.1,r*0.38,r*0.9,0,0,7); g.fill(); g.beginPath(); [[-0.38,0.2],[-0.75,0.85],[-0.2,0.6]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); g.beginPath(); [[0.38,0.2],[0.75,0.85],[0.2,0.6]].forEach(([x,y])=>g.lineTo(cx+x*r,cy+y*r)); g.fill(); break;
+    case "note": g.arc(cx-r*0.45,cy+r*0.6,r*0.3,0,7); g.arc(cx+r*0.55,cy+r*0.4,r*0.3,0,7); g.fill(); g.fillRect(cx-r*0.2,cy-r*0.8,r*0.14,r*1.4); g.fillRect(cx+r*0.8,cy-r*1,r*0.14,r*1.4); g.beginPath(); g.moveTo(cx-r*0.2,cy-r*0.8); g.lineTo(cx+r*0.94,cy-r*1); g.lineTo(cx+r*0.94,cy-r*0.7); g.lineTo(cx-r*0.2,cy-r*0.5); g.fill(); break;
+  }
+  g.restore();
+}
+function art(tile,x,y,w,h,a){
+  g.save(); g.globalAlpha*=a; g.beginPath(); g.rect(x,y,w,h); g.clip();
+  const gr=g.createLinearGradient(x,y,x+w*0.4,y+h); gr.addColorStop(0,tile.c1); gr.addColorStop(1,tile.c2);
+  g.fillStyle=gr; g.fillRect(x,y,w,h);
+  g.globalAlpha*=0.18; g.strokeStyle="#fff"; g.lineWidth=w*0.02;
+  g.beginPath(); g.arc(x+w*0.82,y+h*0.2,w*0.35,0,7); g.stroke();
+  g.globalAlpha/=0.18;
+  symbol(tile.sym,x+w/2,y+h*0.44,Math.min(w,h)*0.22,"rgba(255,255,255,.92)");
+  g.fillStyle="rgba(0,0,0,.35)"; g.fillRect(x,y+h*0.76,w,h*0.24);
+  g.fillStyle="#fff"; g.font=`600 ${Math.max(9,h*0.075)}px "Segoe UI",system-ui,sans-serif`; g.textAlign="center"; g.textBaseline="middle";
+  g.fillText(tile.t.replace("Recent: ",""),x+w/2,y+h*0.88,w*0.9);
+  const sh=g.createLinearGradient(0,y,0,y+h*0.5); sh.addColorStop(0,"rgba(255,255,255,.22)"); sh.addColorStop(1,"rgba(255,255,255,0)");
+  g.fillStyle=sh; g.fillRect(x,y,w,h*0.5);
+  g.restore();
+}
+function gamerpic(i,x,y,s,a){
+  const p=PICS[i]; g.save(); g.globalAlpha*=a;
+  const gr=g.createLinearGradient(x,y,x,y+s); gr.addColorStop(0,p.c1); gr.addColorStop(1,p.c2); g.fillStyle=gr; g.fillRect(x,y,s,s);
+  symbol(p.sym,x+s/2+s*0.02,y+s/2+s*0.04,s*0.32,"rgba(0,0,0,.25)");
+  symbol(p.sym,x+s/2,y+s/2,s*0.32,"#eef");
+  g.fillStyle="rgba(255,255,255,.14)"; g.beginPath(); g.ellipse(x+s*0.4,y-s*0.5,s*1.2,s*0.95,0,0,7); g.fill();
+  g.strokeStyle="rgba(255,255,255,.55)"; g.lineWidth=1.5; g.strokeRect(x+0.75,y+0.75,s-1.5,s-1.5);
+  g.restore();
+}
+function shadowText(t,x,y,size,col,align="left",weight=400){
+  g.font=`${weight} ${size}px "Segoe UI",system-ui,sans-serif`; g.textAlign=align; g.textBaseline="middle";
+  g.fillStyle="rgba(0,0,0,.35)"; g.fillText(t,x+1.5,y+1.5); g.fillStyle=col; g.fillText(t,x,y);
+}
+function pill(x,y,label,col,text){
+  g.fillStyle=col; g.beginPath(); g.arc(x,y,10,0,7); g.fill();
+  g.fillStyle="#fff"; g.font="700 11px sans-serif"; g.textAlign="center"; g.textBaseline="middle"; g.fillText(label,x,y+0.5);
+  shadowText(text,x+16,y,15,"#fff");
+  g.font='400 15px "Segoe UI",system-ui,sans-serif'; return x+16+g.measureText(text).width+22;
+}
+
+// ---------- background (sky, bokeh, curved floor)
+const BOKEH=[...Array(26)].map((_,i)=>({x:Math.random(),y:Math.random()*0.65,r:8+Math.random()*44,s:0.004+Math.random()*0.01,ring:Math.random()<0.45,a:0.05+Math.random()*0.1}));
+function background(th,t,rise){
+  const sky=g.createLinearGradient(0,0,0,H*0.75); sky.addColorStop(0,rgb(th.top)); sky.addColorStop(0.55,rgb(th.mid)); sky.addColorStop(1,rgb(mix(th.mid,[235,240,235],0.55)));
+  g.fillStyle=sky; g.fillRect(0,0,W,H);
+  const gl=g.createRadialGradient(W*0.92,H*0.6,10,W*0.92,H*0.6,W*0.45); gl.addColorStop(0,rgb(th.glow,0.75)); gl.addColorStop(1,rgb(th.glow,0)); g.fillStyle=gl; g.fillRect(0,0,W,H);
+  for(const b of BOKEH){ const x=((b.x+t*b.s)%1.1-0.05)*W, y=b.y*H; g.beginPath(); g.arc(x,y,b.r,0,7);
+    if(b.ring){g.strokeStyle=`rgba(255,255,255,${b.a*1.6})`; g.lineWidth=2; g.stroke(); g.beginPath(); g.arc(x,y,b.r*0.6,0,7); g.stroke();} else {g.fillStyle=`rgba(255,255,255,${b.a})`; g.fill();} }
+  const fy=lerp(H*1.05,H*0.6,rise);
+  g.save(); g.beginPath(); g.ellipse(W*0.5,fy+H*1.25,W*1.25,H*1.25,0,0,7);
+  const fl=g.createLinearGradient(0,fy,0,H); fl.addColorStop(0,"#e6e8ea"); fl.addColorStop(0.18,"#a9adb2"); fl.addColorStop(1,"#55595e");
+  g.fillStyle=fl; g.fill(); g.clip();
+  g.strokeStyle="rgba(255,255,255,.12)"; g.lineWidth=1.5;
+  for(let i=1;i<6;i++){ g.beginPath(); g.ellipse(W*0.86,H*0.9,i*55,i*16,0,0,7); g.stroke(); }
+  g.restore();
+}
+
+// ---------- dashboard
+const TILE_W=420, TILE_H=320, TILE_TOP=248, X0=96;
+function dashboard(th,t){
+  const intro=S.intro===null?10:t-S.intro;
+  const it=reduce?10:intro;
+  const n=CHANNELS.length;
+  // channel names, current at the bottom, following ones stacked above
+  const ys=[0,-44,-77,-103,-128,-150], sizes=[36,27,22,19,17,15], alphas=[1,.72,.5,.32,.18,0];
+  const ca=S.chanAnim;
+  for(let d=-1; d<6; d++){
+    const ci=((Math.round(ca)+d)%n+n)%n, off=Math.round(ca)+d-ca;
+    const k=clamp(off,0,5), lo=Math.floor(k), hi=Math.min(5,lo+1), f=k-lo;
+    let y=203+lerp(ys[lo],ys[hi],f), size=lerp(sizes[lo],sizes[hi],f), a=lerp(alphas[lo],alphas[hi],f);
+    if(off<0){ a=clamp(1+off*2,0,1); y=203-off*30; size=36; }
+    a*=seg(it,0.35+d*0.05,0.5);
+    if(a<=0.01) continue;
+    g.globalAlpha=a; shadowText(CHANNELS[ci].name,X0,y,size,"#fff");
+    if(d===0&&off>-0.5&&off<0.5){ g.fillStyle="#fff"; g.beginPath(); g.arc(X0-14,y,3,0,7); g.fill(); }
+  }
+  g.globalAlpha=1;
+  // tiles
+  const c=CHANNELS[((S.chan%n)+n)%n], ci=((S.chan%n)+n)%n, anim=S.anim[ci];
+  const lp=S.launch? clamp((t-S.launch.t)/0.6,0,1):0;
+  const rt=S.ret? clamp((t-S.ret)/0.7,0,1):1;
+  const fly=seg(it,0.5,0.8);
+  for(let i=c.tiles.length-1;i>=0;i--){
+    const rel=i-anim;
+    if(rel<-1.2||rel>5) continue;
+    let s,x;
+    if(rel>=0){ s=Math.pow(0.66,rel); x=X0; for(let k=0;k<Math.floor(rel);k++) x+=TILE_W*Math.pow(0.66,k)+16*Math.pow(0.66,k); const fr=rel-Math.floor(rel); x+=fr*(TILE_W*Math.pow(0.66,Math.floor(rel))+16); }
+    else { s=1; x=X0+rel*(TILE_W+40); }
+    const w=TILE_W*s, h=TILE_H*s, y=TILE_TOP+(TILE_H-h)*0.5+(1-fly)*60;
+    let a=(rel<0?clamp(1+rel*1.5,0,1):clamp(1-(rel-3.5)/1.5,0,1))*fly*(rt);
+    const selected=Math.abs(rel)<0.5;
+    const pop=selected?1+0.035*clamp(1-Math.abs(rel)*2,0,1):1;
+    let cx=x+w/2, cy=y+h/2, ww=w*pop, hh=h*pop;
+    if(selected&&lp>0){ const z=1+ease(lp)*1.6; ww*=z; hh*=z; cx=lerp(cx,W/2,ease(lp)); cy=lerp(cy,H/2,ease(lp)); }
+    else if(lp>0) a*=1-ease(lp);
+    const sx=S.ret?(1-ease(rt))*-120*(i+1):0;
+    const bx=cx-ww/2+sx, by=cy-hh/2;
+    g.save(); g.globalAlpha=a;
+    // tile frame + reflection
+    g.fillStyle="rgba(0,0,0,.28)"; g.fillRect(bx+4,by+6,ww,hh);
+    g.fillStyle=selected?"rgba(250,250,250,.96)":"rgba(225,228,232,.85)"; g.fillRect(bx,by,ww,hh);
+    const pad=ww*0.035; art(c.tiles[i],bx+pad,by+pad,ww-pad*2,hh*0.78-pad,1);
+    g.fillStyle="#2a2e33"; g.font=`600 ${15*s*pop}px "Segoe UI",system-ui,sans-serif`; g.textAlign="left"; g.textBaseline="middle";
+    g.fillText(c.tiles[i].t,bx+pad,by+hh*0.86,ww-pad*2);
+    g.fillStyle="#6a7078"; g.font=`${12*s*pop}px "Segoe UI",system-ui,sans-serif`; g.fillText(c.name,bx+pad,by+hh*0.94);
+    const rg=g.createLinearGradient(0,by+hh+3,0,by+hh*1.3); rg.addColorStop(0,"rgba(255,255,255,.22)"); rg.addColorStop(1,"rgba(255,255,255,0)");
+    g.fillStyle=rg; g.fillRect(bx,by+hh+3,ww,hh*0.3);
+    g.restore();
+  }
+  g.globalAlpha=fly*(1-lp);
+  shadowText(`${S.sel[ci]+1} of ${c.tiles.length}`,X0,TILE_TOP+TILE_H+26,14,"rgba(255,255,255,.85)");
+  // profile
+  const pa=seg(it,0.7,0.5)*(1-lp);
+  g.globalAlpha=pa; shadowText("Player One",W-150,64,19,"#fff","right");
+  shadowText("★ 1,240",W-150,88,14,"rgba(255,255,255,.8)","right");
+  gamerpic(S.pic,W-136,38,64,pa);
+  // hints
+  g.globalAlpha=seg(it,0.9,0.5)*(1-lp);
+  let hx=pill(108,650,"A","#4caf2a","Play"); hx=pill(hx,650,"≡","#555c63","Settings");
+  g.globalAlpha=1;
+}
+
+// ---------- settings page (slate panel, green bar)
+function settingsPage(th,t,a){
+  g.save(); g.globalAlpha=a;
+  g.fillStyle="rgba(0,0,0,.16)"; g.fillRect(-W,-H,W*3,H*3);
+  shadowText("Settings",96,67,32,"#fff"); shadowText("Display  ·  a few rows from the real app",96,96,17,"rgba(255,255,255,.86)");
+  const px=W/2-445, py=112, pw=890, ph=480;
+  g.fillStyle="rgba(0,0,0,.2)"; g.fillRect(px,py+4,pw,ph);
+  g.fillStyle="rgba(66,82,100,.92)"; g.fillRect(px,py,pw,ph);
+  const sh=g.createLinearGradient(0,py,0,py+120); sh.addColorStop(0,"rgba(255,255,255,.07)"); sh.addColorStop(1,"rgba(255,255,255,0)"); g.fillStyle=sh; g.fillRect(px,py,pw,120);
+  const lx=px+18, ly=py+14, lw=434, rh=46;
+  const by=ly+S.bar*rh;
+  const bg=g.createLinearGradient(0,by,0,by+rh-6); bg.addColorStop(0,rgb(mix(th.bar,[255,255,255],0.25))); bg.addColorStop(1,rgb(mix(th.bar,[0,0,0],0.15)));
+  g.fillStyle=bg; g.fillRect(lx,by+2,lw,rh-6);
+  SETTINGS.forEach((r,i)=>{
+    const y=ly+i*rh+rh/2-1;
+    g.fillStyle="rgba(255,255,255,.07)"; g.fillRect(lx+4,ly+(i+1)*rh-3,lw-8,1);
+    shadowText(r.name,lx+14,y,18,i===S.row?"#fff":"#e2e8ee");
+    g.font='400 15px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle=i===S.row?"#fff":"#b0bcc8"; g.fillText(r.val(),lx+lw-12,y);
+  });
+  // right column
+  const rx=px+480, rw=pw-480-26;
+  wrap(SETTINGS[S.row].desc,rx,py+36,rw,20,"#e2e8ee");
+  if(SETTINGS[S.row].name==="Gamerpic"){ gamerpic(S.pic,rx,py+ph-190,150,1); shadowText(PICS[S.pic].n,rx+166,py+ph-52,19,"#fff"); }
+  if(SETTINGS[S.row].name==="Theme"){ THEME_NAMES.forEach((n,i)=>{ const T=THEMES[n]; const x=rx+i*62, y=py+ph-110; const gr=g.createLinearGradient(0,y,0,y+50); gr.addColorStop(0,rgb(T.top)); gr.addColorStop(1,rgb(T.mid)); g.fillStyle=gr; g.fillRect(x,y,50,50); if(n===S.themeName){g.strokeStyle="#fff";g.lineWidth=3;g.strokeRect(x-3,y-3,56,56);} }); }
+  let hx=pill(108,650,"A","#4caf2a","Select"); pill(hx,650,"B","#c8362c","Back");
+  g.restore();
+}
+function wrap(text,x,y,w,size,col){
+  g.font=`${size}px "Segoe UI",system-ui,sans-serif`; g.fillStyle=col; g.textAlign="left"; g.textBaseline="top";
+  let line="", yy=y; for(const word of text.split(" ")){ const tst=line?line+" "+word:word; if(g.measureText(tst).width>w&&line){ g.fillText(line,x,yy); yy+=size*1.35; line=word; } else line=tst; } g.fillText(line,x,yy);
+}
+
+// ---------- "game running" screen
+function gameScreen(t){
+  const p=S.playing, e=t-p.t;
+  g.fillStyle="#000"; g.fillRect(0,0,W,H);
+  const a=clamp(e/0.4,0,1)*clamp((p.end?1-(t-p.end)/0.35:1),0,1);
+  g.globalAlpha=a;
+  art(p.tile,W/2-200,H/2-200,400,300,1);
+  shadowText("Your emulator would be running here, fullscreen.",W/2,H/2+140,22,"#fff","center");
+  shadowText("Press B (or Guide on a real controller) to go back to the dashboard.",W/2,H/2+174,16,"rgba(255,255,255,.7)","center");
+  g.globalAlpha=1;
+}
+
+// ---------- input
+function input(k){
+  if(!scr.classList.contains("active")) scr.classList.add("active");
+  const t=now();
+  if(S.intro===null) S.intro=t-10;
+  if(S.playing){ if(k==="b"||k==="a"||k==="start"){ if(!S.playing.end){ S.playing.end=t; } } return; }
+  if(S.launch) return;
+  if(S.page){
+    if(k==="up"&&S.row>0) S.row--;
+    else if(k==="down"&&S.row<SETTINGS.length-1) S.row++;
+    else if(k==="a"&&SETTINGS[S.row].act){ SETTINGS[S.row].act(); }
+    else if(k==="b"||k==="start"){ S.page=false; }
+    return;
+  }
+  const n=CHANNELS.length, ci=((S.chan%n)+n)%n;
+  if(k==="up"){ S.chan++; S.chanPos++; }
+  else if(k==="down"){ S.chan--; S.chanPos--; }
+  else if(k==="left"&&S.sel[ci]>0) S.sel[ci]--;
+  else if(k==="right"&&S.sel[ci]<CHANNELS[ci].tiles.length-1) S.sel[ci]++;
+  else if(k==="a"){ S.launch={t, tile:CHANNELS[ci].tiles[S.sel[ci]]}; }
+  else if(k==="start"){ S.page=true; S.subFrom=0.94; S.subAnim=0; S.subVel=0; }
+}
+const KEYS={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right",Enter:"a"," ":"a",Escape:"b",Backspace:"b",Tab:"start"};
+scr.addEventListener("keydown",e=>{ const k=KEYS[e.key]; if(k){ e.preventDefault(); input(k); } });
+scr.addEventListener("blur",()=>scr.classList.remove("active"));
+document.querySelectorAll(".vpad button").forEach(b=>b.addEventListener("click",()=>{ scr.focus({preventScroll:true}); input(b.dataset.k); }));
+// swipe on touch
+let ts=null;
+scr.addEventListener("touchstart",e=>{ ts=[e.touches[0].clientX,e.touches[0].clientY]; },{passive:true});
+scr.addEventListener("touchend",e=>{ if(!ts) return; const dx=e.changedTouches[0].clientX-ts[0], dy=e.changedTouches[0].clientY-ts[1]; ts=null;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<24){ input("a"); return; }
+  if(Math.abs(dx)>Math.abs(dy)) input(dx<0?"right":"left"); else input(dy<0?"down":"up"); });
+scr.addEventListener("click",()=>scr.focus({preventScroll:true}));
+// start the intro when the demo scrolls into view
+new IntersectionObserver((es,o)=>{ if(es[0].isIntersecting&&S.intro===null){ S.intro=now(); o.disconnect(); } },{threshold:0.4}).observe(scr);
+
+// ---------- loop
+let last=performance.now();
+function frame(ms){
+  const dt=Math.min(0.05,(ms-last)/1000); last=ms; const t=now();
+  if(S.themeT<1) S.themeT=Math.min(1,S.themeT+dt/0.6);
+  spring(S,"chanAnim","chanVel",S.chanPos,17,dt);
+  CHANNELS.forEach((_,i)=>springArr(S.anim,S.vel,i,S.sel[i],19,dt));
+  spring(S,"pageAnim","pageVel",S.page?1:0,13,dt);
+  spring(S,"subAnim","subVel",1,16,dt);
+  spring(S,"bar","barVel",S.row,22,dt);
+  if(S.launch&&t-S.launch.t>0.62){ S.playing={t,tile:S.launch.tile}; S.launch=null; }
+  if(S.playing&&S.playing.end&&t-S.playing.end>0.35){ S.playing=null; S.ret=t; }
+  if(S.ret&&t-S.ret>0.8) S.ret=null;
+
+  const th=themeNow();
+  g.setTransform(1,0,0,1,0,0);
+  if(S.playing){ gameScreen(t); requestAnimationFrame(frame); return; }
+  const it=S.intro===null?0:(reduce?10:t-S.intro);
+  background(th,t,seg(it,0.05,0.9));
+  // PS4-style: the dashboard pushes forward and fades while the page grows in.
+  const pa=clamp(S.pageAnim,0,1.2);
+  const zoom=s=>{ g.setTransform(s,0,0,s,W/2*(1-s),H/2*(1-s)); };
+  const da=clamp(1-pa*1.15,0,1);
+  if(da>0){ zoom(1+0.09*pa); g.globalAlpha=da; if(S.intro!==null) dashboard(th,t); g.globalAlpha=1; }
+  if(pa>0.01){ const sub=lerp(S.subFrom,1,clamp(S.subAnim,0,1)); zoom((0.9+0.1*pa)*sub); settingsPage(th,t,Math.pow(clamp(pa,0,1),0.8)); }
+  g.setTransform(1,0,0,1,0,0);
+  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.8.0",W-22,H-16); g.globalAlpha=1; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
