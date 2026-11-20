@@ -11,6 +11,11 @@ mod ra;
 mod runtime;
 mod scene;
 mod sound;
+mod stats;
+mod music;
+mod discord;
+mod net;
+mod playtime;
 mod systems;
 mod winapi;
 
@@ -36,6 +41,7 @@ pub enum Action {
     OpenSetup,
     Rescan,
     Exit,
+    GetPorts,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -135,6 +141,24 @@ pub struct App {
     custom_pic_tex: Option<egui::TextureHandle>,
     /// Typed password, kept only in memory until you press Sign In.
     pub ra_password: String,
+    pub music_tx: std::sync::mpsc::Sender<music::Cmd>,
+    music_rx: Receiver<music::Msg>,
+    music_state: (bool, u32),
+    discord_tx: std::sync::mpsc::Sender<discord::Cmd>,
+    discord_last: Option<Option<discord::Activity>>,
+    pub net_tx: std::sync::mpsc::Sender<net::Job>,
+    net_rx: Receiver<net::Msg>,
+    pub ports: HashMap<&'static str, PortState>,
+    pub ports_page: Option<menu::PortsPage>,
+    pub update: Option<net::Release>,
+    pub update_progress: Option<f32>,
+    pub profile: stats::Profile,
+    pub details: Option<menu::Details>,
+    pending: Vec<Pad>,
+    pub guide: Option<GuideMenu>,
+    /// Game being played and when it started.
+    pub play_game: Option<usize>,
+    pub play_started: Option<Instant>,
     page_anim: f32,
     page_vel: f32,
     sub_anim: f32,
@@ -170,7 +194,7 @@ impl App {
         let cfg = Config::load();
         install_font(&cc.egui_ctx);
         let (tx, rx) = channel();
-        let shared = Arc::new(Shared { child: Mutex::new(None), running: false.into(), closing: false.into() });
+        let shared = Arc::new(Shared { child: Mutex::new(None), running: false.into(), closing: false.into(), guide_open: false.into() });
         input::spawn(tx, cc.egui_ctx.clone(), shared.clone());
         let (auto_tx, auto_rx) = channel();
         let (pri_tx, pri_rx) = channel();
@@ -182,6 +206,18 @@ impl App {
         let (rt_tx, rt_jobs) = channel();
         let (rt_msg_tx, rt_rx) = channel();
         runtime::spawn(rt_jobs, rt_msg_tx, cc.egui_ctx.clone());
+        let (music_tx, music_jobs) = channel();
+        let (music_msg_tx, music_rx) = channel();
+        music::spawn(music_jobs, music_msg_tx, cfg.music_volume as f32 / 100.0);
+        let (discord_tx, discord_jobs) = channel();
+        discord::spawn(discord_jobs, cfg.discord_app_id.clone());
+        let (net_tx, net_jobs) = channel();
+        let (net_msg_tx, net_rx) = channel();
+        net::spawn(net_jobs, net_msg_tx, cc.egui_ctx.clone());
+        net::cleanup_old();
+        if cfg.check_updates && std::env::var("NXE_NO_UPDATE").is_err() {
+            let _ = net_tx.send(net::Job::Check(vec![net::SELF_REPO]));
+        }
         let background = load_texture(&cc.egui_ctx, "bg", &theme_dir().join("background.png"))
             .or_else(|| load_texture(&cc.egui_ctx, "bg", &theme_dir().join("background.jpg")));
         let sounds = sound::Sounds::new(theme_dir().join("sounds"), cfg.sounds);
@@ -238,6 +274,23 @@ impl App {
             cropper: None,
             custom_pic_tex: None,
             ra_password: String::new(),
+            music_tx,
+            music_rx,
+            music_state: (false, u32::MAX),
+            discord_tx,
+            discord_last: None,
+            net_tx,
+            net_rx,
+            ports: HashMap::new(),
+            ports_page: None,
+            update: None,
+            update_progress: None,
+            profile: stats::Profile::load(),
+            details: None,
+            pending: vec![],
+            guide: None,
+            play_game: None,
+            play_started: None,
             page_anim: 0.0,
             page_vel: 0.0,
             sub_anim: 1.0,
@@ -253,6 +306,7 @@ impl App {
         app.reload_custom_pic_ctx(&cc.egui_ctx);
         app.user_pics = profile::load_user_pics(&cc.egui_ctx);
         app.load_cached_ra_avatar(&cc.egui_ctx);
+        app.cfg.apply_controller();
         app.theme_from = scene::theme(&app.cfg.theme);
         if !setup {
             app.intro = Some(Instant::now());
@@ -366,13 +420,33 @@ impl App {
 
         let mut named: Vec<(String, Vec<Tile>)> = Vec::new();
 
-        // ---- home: recently played across every console
+        // ---- home: pinned games, then recently played across every console
         let mut home = Vec::new();
+        let pinned: Vec<usize> = self
+            .profile
+            .pinned
+            .iter()
+            .filter_map(|k| self.games.iter().position(|g| stats::key(g) == *k))
+            .filter(|gi| !self.profile.is_hidden(&self.games[*gi]))
+            .collect();
+        for gi in &pinned {
+            let g = &self.games[*gi];
+            home.push(Tile {
+                title: g.name.clone(),
+                subtitle: format!("Pinned · {}", g.system.short()),
+                action: Action::Launch(*gi),
+                game: Some(*gi),
+                art: None,
+                glyph: Icon::Play,
+                accent: None,
+            });
+        }
         let recent: Vec<usize> = self
             .cfg
             .recent
             .iter()
             .filter_map(|p| self.games.iter().position(|g| g.path.to_string_lossy() == *p))
+            .filter(|gi| !pinned.contains(gi) && !self.profile.is_hidden(&self.games[*gi]))
             .take(6)
             .collect();
         for (i, gi) in recent.iter().enumerate() {
@@ -392,8 +466,9 @@ impl App {
         let mut console_chans = Vec::new();
         for s in systems::ALL {
             let emu = self.cfg.emulator(s);
-            let games: Vec<(usize, &Game)> = self.games.iter().enumerate().filter(|(_, g)| g.system == s).collect();
-            if emu.is_none() && games.is_empty() {
+            let games: Vec<(usize, &Game)> =
+                self.games.iter().enumerate().filter(|(_, g)| g.system == s && (self.cfg.show_hidden || !self.profile.is_hidden(g))).collect();
+            if emu.is_none() && games.is_empty() && s != System::Pc {
                 continue;
             }
             let mut tiles: Vec<Tile> = games
@@ -426,10 +501,23 @@ impl App {
                     accent: None,
                 });
             }
+            if s == System::Pc {
+                // Replace the empty "Add games" tile, or add after your ports.
+                tiles.retain(|t| t.game.is_some());
+                tiles.push(Tile {
+                    title: "Get More Ports".into(),
+                    subtitle: "Download PC ports from GitHub".into(),
+                    action: Action::GetPorts,
+                    game: None,
+                    art: None,
+                    glyph: Icon::Plus,
+                    accent: None,
+                });
+            }
             console_chans.push((s.channel().to_string(), tiles));
         }
 
-        if recent.is_empty() {
+        if recent.is_empty() && pinned.is_empty() {
             for (ci, (name, tiles)) in console_chans.iter().enumerate() {
                 let n = tiles.iter().filter(|t| t.game.is_some()).count();
                 if n > 0 {
@@ -710,27 +798,49 @@ impl App {
         self.toast = Some((s.into(), Instant::now()));
     }
 
+    pub fn launch_game(&mut self, i: usize) {
+        let s = self.games[i].system;
+        if self.cfg.launcher(s) == config::Launcher::None {
+            self.no_emulator_dialog(s, i);
+            return;
+        }
+        self.sounds.play("launch");
+        self.launching = Some((Instant::now(), Some(i), Some(s)));
+    }
+
+    /// Keep the profile file's name / gamerpic / theme in step with the settings.
+    fn sync_profile(&mut self) {
+        let pr = &mut self.profile;
+        if pr.gamertag != self.cfg.gamertag || pr.gamerpic != self.cfg.gamerpic || pr.theme != self.cfg.theme || pr.ra_user != self.cfg.ra_user {
+            pr.gamertag = self.cfg.gamertag.clone();
+            pr.gamerpic = self.cfg.gamerpic.clone();
+            pr.theme = self.cfg.theme.clone();
+            pr.ra_user = self.cfg.ra_user.clone();
+            // Your own picture travels with the profile.
+            if self.cfg.gamerpic == "custom" {
+                let _ = std::fs::create_dir_all(stats::dir());
+                let _ = std::fs::copy(theme_dir().join("profile.png"), stats::pic_path());
+            }
+            if self.cfg.setup_done {
+                pr.save();
+            }
+        }
+    }
+
     fn activate(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         let Some(tile) = self.channels.get(self.chan).and_then(|c| c.tiles.get(c.sel)).cloned() else {
             return;
         };
         self.sounds.play("select");
         match tile.action {
-            Action::Launch(i) => {
-                let s = self.games[i].system;
-                if self.cfg.launcher(s) == config::Launcher::None {
-                    self.no_emulator_dialog(s, i);
-                    return;
-                }
-                self.sounds.play("launch");
-                self.launching = Some((Instant::now(), Some(i), Some(s)));
-            }
+            Action::Launch(i) => self.launch_game(i),
             Action::GoToChannel(c) => {
                 self.set_chan(c.min(self.channels.len() - 1));
                 self.sounds.play("channel");
             }
             Action::AddFolder(s) => self.add_folder(s, frame),
             Action::OpenSettings => self.menu = Some(menu::Menu::new(menu::Kind::Settings)),
+            Action::GetPorts => self.open_ports_page(),
             Action::OpenSetup => self.menu = Some(menu::Menu::new(menu::Kind::Setup)),
             Action::Rescan => {
                 self.cfg = Config::load();
@@ -844,6 +954,8 @@ impl App {
                 *self.shared.child.lock().unwrap() = Some(child);
                 self.shared.running.store(true, Ordering::Relaxed);
                 self.playing = Some(name);
+                self.play_game = game;
+                self.play_started = Some(Instant::now());
                 if self.cfg.minimize_while_playing {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
@@ -868,7 +980,19 @@ impl App {
     }
 
     fn handle(&mut self, p: Pad, ctx: &egui::Context, frame: &eframe::Frame) {
-        if self.launching.is_some() || self.playing.is_some() {
+        if self.playing.is_some() {
+            if self.guide.is_some() {
+                if self.ach.is_some() {
+                    self.ach_input(p);
+                } else {
+                    self.guide_input(p, ctx);
+                }
+            } else if p == Pad::Guide {
+                self.open_guide(ctx);
+            }
+            return;
+        }
+        if self.launching.is_some() {
             return;
         }
         if self.cropper.is_some() {
@@ -901,6 +1025,14 @@ impl App {
         }
         if self.ach.is_some() {
             self.ach_input(p);
+            return;
+        }
+        if self.ports_page.is_some() {
+            self.ports_input(p);
+            return;
+        }
+        if self.details.is_some() {
+            self.details_input(p);
             return;
         }
         if self.menu.is_some() {
@@ -942,7 +1074,7 @@ impl App {
             }
             Pad::Y => {
                 if let Some(gi) = self.focused_game() {
-                    self.open_picker(gi);
+                    self.open_details(gi);
                 }
             }
             Pad::X => {
@@ -1018,6 +1150,15 @@ fn emu_name(p: Option<&std::path::Path>) -> String {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Pads are collected here because this also runs while the window is minimized:
+        // Guide must be able to bring the dashboard back over a game.
+        for p in self.rx.try_iter().collect::<Vec<_>>() {
+            if p == Pad::Guide && self.playing.is_some() && self.guide.is_none() {
+                self.open_guide(ctx);
+            } else {
+                self.pending.push(p);
+            }
+        }
         // Runs even while minimized: notice when the emulator exits and come back.
         if self.shared.running.load(Ordering::Relaxed) {
             let mut lock = self.shared.child.lock().unwrap();
@@ -1029,6 +1170,19 @@ impl eframe::App for App {
                 *lock = None;
                 drop(lock);
                 self.shared.running.store(false, Ordering::Relaxed);
+                self.shared.guide_open.store(false, Ordering::Relaxed);
+                if let (Some(gi), Some(t)) = (self.play_game.take(), self.play_started.take()) {
+                    if let Some(g) = self.games.get(gi) {
+                        let secs = t.elapsed().as_secs();
+                        // Ignore instant crashes / misclicks.
+                        if secs >= 10 {
+                            self.profile.add_session(g, secs);
+                            self.profile.save();
+                        }
+                    }
+                }
+                self.guide = None;
+                self.ach = None;
                 self.playing = None;
                 self.rebuild();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -1050,11 +1204,14 @@ impl eframe::App for App {
         self.poll_covers(&ctx);
         self.poll_ra(&ctx);
         self.poll_runtime();
+        self.sync_profile();
+        self.poll_net();
+        self.drive_music_and_discord();
         self.ra_prefetch();
 
         // Input: gamepad thread + keyboard. While typing in a text box only Enter/Esc count.
         let editing = self.menu.as_ref().map(|m| m.edit.is_some()).unwrap_or(false);
-        let mut pads: Vec<Pad> = self.rx.try_iter().collect();
+        let mut pads: Vec<Pad> = std::mem::take(&mut self.pending);
         ctx.input(|i| {
             use egui::Key::*;
             let map: &[(egui::Key, Pad)] = if editing {
@@ -1186,12 +1343,21 @@ impl eframe::App for App {
                     Some("pics") => profile::draw_pic_picker(self, ui, &ctx),
                     Some("ach") => menu::draw_achievements(self, ui, &ctx),
                     Some("cover") => menu::draw_picker(self, ui, &ctx),
+                    Some("details") => menu::draw_details(self, ui, &ctx),
+                    Some("ports") => menu::draw_ports(self, ui, &ctx),
                     _ => menu::draw(self, ui, &ctx),
                 }
             });
         }
         ui.scope_builder(egui::UiBuilder::new().layer_id(top_layer).max_rect(screen), |ui| {
             menu::draw_dialog(self, ui, &ctx);
+            if self.guide.is_some() {
+                if self.ach.is_some() {
+                    menu::draw_achievements(self, ui, &ctx);
+                } else {
+                    scene::draw_guide(self, ui, &ctx);
+                }
+            }
         });
 
         // Finish closing a fading menu; quick setup hands over to the dashboard intro.
@@ -1214,13 +1380,231 @@ impl eframe::App for App {
 
         // Repaint at the display's refresh rate (vsync), or at the chosen cap.
         self.last_paint = Instant::now();
-        if self.playing.is_some() {
+        if self.playing.is_some() && self.guide.is_none() {
             ctx.request_repaint_after(Duration::from_millis(500));
         } else if self.cfg.frame_rate > 0 {
             ctx.request_repaint_after(Duration::from_secs_f32(1.0 / self.cfg.frame_rate as f32));
         } else {
             ctx.request_repaint();
         }
+    }
+}
+
+// ---------------------------------------------------------------- ports / updates / music / discord
+
+#[derive(Default)]
+pub struct PortState {
+    pub latest: Option<Result<net::Release, String>>,
+    pub checked: Option<Instant>,
+    pub progress: Option<f32>,
+    pub busy: bool,
+}
+
+impl App {
+    fn poll_net(&mut self) {
+        let msgs: Vec<net::Msg> = self.net_rx.try_iter().collect();
+        for m in msgs {
+            match m {
+                net::Msg::Latest(repo, r) if repo == net::SELF_REPO => {
+                    if let Ok(rel) = r {
+                        if net::newer(&rel.tag, env!("CARGO_PKG_VERSION")) {
+                            self.toast(format!("Update available: {}. Settings > General", rel.tag));
+                            self.update = Some(rel);
+                        }
+                    }
+                }
+                net::Msg::Latest(repo, r) => {
+                    let st = self.ports.entry(repo).or_default();
+                    st.latest = Some(r);
+                    st.checked = Some(Instant::now());
+                }
+                net::Msg::Progress(repo, f) if repo == net::SELF_REPO => self.update_progress = Some(f),
+                net::Msg::Progress(repo, f) => self.ports.entry(repo).or_default().progress = Some(f),
+                net::Msg::Installed(repo, r) => {
+                    let st = self.ports.entry(repo).or_default();
+                    st.busy = false;
+                    st.progress = None;
+                    let name = net::PORTS.iter().find(|p| p.repo == repo).map(|p| p.name).unwrap_or(repo);
+                    match r {
+                        Ok(tag) => {
+                            // Make sure the ports folder is part of the PC Ports channel.
+                            let dir = net::ports_dir().to_string_lossy().to_string();
+                            let pc = self.cfg.sys_mut(System::Pc);
+                            if !pc.game_dirs.contains(&dir) {
+                                pc.game_dirs.push(dir);
+                            }
+                            self.cfg.save();
+                            self.rescan();
+                            self.sounds.play("select");
+                            self.toast(format!("{name} {tag} installed. It's in PC Ports"));
+                        }
+                        Err(e) => self.toast(format!("{name}: {e}")),
+                    }
+                }
+                net::Msg::SelfReady(r) => {
+                    self.update_progress = None;
+                    match r {
+                        Ok(exe) => {
+                            self.toast("Restarting into the new version…");
+                            if let Err(e) = net::apply_self_update(&exe) {
+                                self.toast(format!("Update failed: {e}"));
+                            }
+                        }
+                        Err(e) => self.toast(format!("Update failed: {e}")),
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn open_ports_page(&mut self) {
+        let stale: Vec<&'static str> = net::PORTS
+            .iter()
+            .filter(|p| self.ports.get(p.repo).and_then(|s| s.checked).map(|t| t.elapsed() > Duration::from_secs(600)).unwrap_or(true))
+            .map(|p| p.repo)
+            .collect();
+        if !stale.is_empty() {
+            let _ = self.net_tx.send(net::Job::Check(stale));
+        }
+        self.ports_page = Some(menu::PortsPage { sel: 0, opened: Instant::now() });
+        self.sounds.play("select");
+    }
+
+    fn drive_music_and_discord(&mut self) {
+        // Music: only on the dashboard, never over a game.
+        let active = self.cfg.music_on && self.playing.is_none() && self.launching.is_none();
+        if (active, self.cfg.music_volume) != self.music_state {
+            if self.music_state.1 != self.cfg.music_volume {
+                let _ = self.music_tx.send(music::Cmd::Volume(self.cfg.music_volume as f32 / 100.0));
+            }
+            if self.music_state.0 != active {
+                let _ = self.music_tx.send(music::Cmd::Active(active));
+            }
+            self.music_state = (active, self.cfg.music_volume);
+        }
+        let songs: Vec<music::Msg> = self.music_rx.try_iter().collect();
+        for m in songs {
+            let music::Msg::NowPlaying(n) = m;
+            if self.playing.is_none() {
+                self.toast(format!("Now playing: {n}"));
+            }
+        }
+        // Discord: "Playing <game>" while a game runs.
+        let want = if self.cfg.discord_status {
+            self.playing.as_ref().map(|name| discord::Activity {
+                details: name.clone(),
+                state: self.play_game.and_then(|g| self.games.get(g)).map(|g| g.system.channel().to_string()).unwrap_or_default(),
+                start: self.play_started.map(|t| chrono::Utc::now().timestamp() - t.elapsed().as_secs() as i64),
+            })
+        } else {
+            None
+        };
+        if self.discord_last.as_ref() != Some(&want) {
+            let _ = self.discord_tx.send(discord::Cmd::Set(want.clone()));
+            self.discord_last = Some(want);
+        }
+    }
+
+    pub fn set_discord_id(&mut self, id: String) {
+        self.cfg.discord_app_id = id.trim().to_string();
+        let _ = self.discord_tx.send(discord::Cmd::AppId(self.cfg.discord_app_id.clone()));
+        self.discord_last = None;
+    }
+}
+
+// ---------------------------------------------------------------- Guide menu (in-game)
+
+pub struct GuideMenu {
+    pub sel: usize,
+    pub opened: Instant,
+    /// Confirming "Quit Game".
+    pub confirm_quit: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum GuideItem {
+    Resume,
+    Achievements,
+    Quit,
+}
+
+impl App {
+    pub fn guide_items(&self) -> Vec<GuideItem> {
+        let mut v = vec![GuideItem::Resume];
+        if self.play_game.map(|g| self.ra_match.contains_key(&g)).unwrap_or(false) && self.ra_signed_in() {
+            v.push(GuideItem::Achievements);
+        }
+        v.push(GuideItem::Quit);
+        v
+    }
+
+    fn open_guide(&mut self, ctx: &egui::Context) {
+        self.guide = Some(GuideMenu { sel: 0, opened: Instant::now(), confirm_quit: false });
+        self.shared.guide_open.store(true, Ordering::Relaxed);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        winapi::focus_pid(std::process::id());
+        self.sounds.play("select");
+        ctx.request_repaint();
+    }
+
+    fn resume_game(&mut self, ctx: &egui::Context) {
+        self.guide = None;
+        self.ach = None;
+        self.shared.guide_open.store(false, Ordering::Relaxed);
+        self.sounds.play("back");
+        let pid = self.shared.child.lock().ok().and_then(|c| c.as_ref().map(|c| c.id()));
+        if let Some(pid) = pid {
+            winapi::focus_pid(pid);
+        }
+        if self.cfg.minimize_while_playing {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+    }
+
+    fn guide_input(&mut self, p: Pad, ctx: &egui::Context) {
+        let items = self.guide_items();
+        let Some(g) = self.guide.as_mut() else { return };
+        match p {
+            Pad::Up if g.sel > 0 && !g.confirm_quit => {
+                g.sel -= 1;
+                self.sounds.play("move");
+            }
+            Pad::Down if g.sel + 1 < items.len() && !g.confirm_quit => {
+                g.sel += 1;
+                self.sounds.play("move");
+            }
+            Pad::B if g.confirm_quit => {
+                g.confirm_quit = false;
+                self.sounds.play("back");
+            }
+            Pad::B | Pad::Guide => self.resume_game(ctx),
+            Pad::A => match items.get(g.sel).copied().unwrap_or(GuideItem::Resume) {
+                GuideItem::Resume => self.resume_game(ctx),
+                GuideItem::Achievements => {
+                    if let Some(gi) = self.play_game {
+                        self.open_achievements(gi);
+                    }
+                }
+                GuideItem::Quit if !g.confirm_quit => {
+                    g.confirm_quit = true;
+                    self.sounds.play("select");
+                }
+                GuideItem::Quit => {
+                    // Close the game the polite way; the dashboard comes back when it exits.
+                    g.confirm_quit = false;
+                    self.sounds.play("select");
+                    let sh = self.shared.clone();
+                    std::thread::spawn(move || input::kill(&sh));
+                    self.toast("Closing the game…");
+                }
+            },
+            _ => {}
+        }
+    }
+
+    pub fn guide_play_time(&self) -> Option<Duration> {
+        self.play_started.map(|t| t.elapsed())
     }
 }
 
@@ -1242,6 +1626,12 @@ impl App {
         }
         if self.picker.is_some() {
             return Some("cover".into());
+        }
+        if self.details.is_some() {
+            return Some("details".into());
+        }
+        if self.ports_page.is_some() {
+            return Some("ports".into());
         }
         let m = self.menu.as_ref()?;
         if m.closing.is_some() {
@@ -1364,6 +1754,8 @@ fn nxe_id(s: &str) -> egui::Id {
 fn page_depth(k: &str) -> u8 {
     match k.split(':').next().unwrap_or("") {
         "menu" => k.matches(':').count() as u8,
+        "details" => 5,
+        "ports" => 4,
         _ => 9,
     }
 }

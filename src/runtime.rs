@@ -62,7 +62,7 @@ pub fn spawn(rx: Receiver<Job>, tx: Sender<Msg>, ctx: eframe::egui::Context) {
     });
 }
 
-fn download(agent: &ureq::Agent, url: &str, to: &Path, mut progress: impl FnMut(f32)) -> Result<(), String> {
+pub fn download(agent: &ureq::Agent, url: &str, to: &Path, mut progress: impl FnMut(f32)) -> Result<(), String> {
     let mut resp = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
     let total = resp
         .headers()
@@ -90,7 +90,7 @@ fn download(agent: &ureq::Agent, url: &str, to: &Path, mut progress: impl FnMut(
     std::fs::rename(&tmp, to).map_err(|e| e.to_string())
 }
 
-fn unzip(zip_path: &Path, dest: &Path) -> Result<(), String> {
+pub fn unzip(zip_path: &Path, dest: &Path) -> Result<(), String> {
     let f = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut z = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
     z.extract(dest).map_err(|e| e.to_string())

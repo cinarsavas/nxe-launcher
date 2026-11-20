@@ -79,8 +79,12 @@ pub fn scan(system: System, dirs: &[PathBuf], cover_dirs: &CoverDirs) -> Vec<Gam
     out.retain(|g| seen.insert(g.path.to_string_lossy().to_lowercase().replace('\\', "/")));
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     for g in &mut out {
-        if system == System::Ps2 && g.id.is_none() {
-            g.id = ps2_serial(&g.path);
+        if g.id.is_none() {
+            g.id = match system {
+                System::Ps2 | System::Ps1 => ps_serial(&g.path),
+                System::Psp => psp_disc_id(&g.path),
+                _ => None,
+            };
         }
         g.embedded = g.cover.take();
         resolve_cover(g, cover_dirs);
@@ -415,56 +419,170 @@ fn gc_header(p: &Path) -> Option<(String, String)> {
     Some((String::from_utf8_lossy(id).to_string(), title))
 }
 
-// ---------------------------------------------------------------- PS2 serial
+// ---------------------------------------------------------------- disc IDs (ISO9660)
 
-/// Reads SYSTEM.CNF from a PS2 .iso (ISO9660) and returns e.g. "SLUS-20062".
-fn ps2_serial(p: &Path) -> Option<String> {
-    use std::io::{Seek, SeekFrom};
+/// Minimal ISO9660 reader for .iso (2048-byte sectors) and raw .bin/.cue images (2352-byte
+/// sectors, Mode 1 or Mode 2 Form 1). Enough to read SYSTEM.CNF / PARAM.SFO.
+struct Iso {
+    f: File,
+    sector: u64,
+    offset: u64,
+}
+
+impl Iso {
+    fn open(p: &Path) -> Option<Iso> {
+        let ext = p.extension()?.to_string_lossy().to_lowercase();
+        let path = if ext == "cue" { cue_first_bin(p)? } else { p.to_path_buf() };
+        let mut iso = Iso { f: File::open(&path).ok()?, sector: 2048, offset: 0 };
+        for (sector, offset) in [(2048u64, 0u64), (2352, 24), (2352, 16)] {
+            iso.sector = sector;
+            iso.offset = offset;
+            if let Some(pvd) = iso.read(16, 2048) {
+                if &pvd[1..6] == b"CD001" {
+                    return Some(iso);
+                }
+            }
+        }
+        None
+    }
+
+    /// Reads `len` bytes of user data starting at sector `lba`.
+    fn read(&mut self, lba: u64, len: usize) -> Option<Vec<u8>> {
+        use std::io::{Seek, SeekFrom};
+        let mut out = Vec::with_capacity(len);
+        let mut l = lba;
+        while out.len() < len {
+            let mut buf = [0u8; 2048];
+            self.f.seek(SeekFrom::Start(l * self.sector + self.offset)).ok()?;
+            self.f.read_exact(&mut buf).ok()?;
+            let take = (len - out.len()).min(2048);
+            out.extend_from_slice(&buf[..take]);
+            l += 1;
+        }
+        Some(out)
+    }
+
+    /// (lba, size) of a file or directory, e.g. ["PSP_GAME", "PARAM.SFO"].
+    fn find(&mut self, path: &[&str]) -> Option<(u64, usize)> {
+        let pvd = self.read(16, 2048)?;
+        let root = &pvd[156..156 + 34];
+        let mut cur = (u32::from_le_bytes(root[2..6].try_into().ok()?) as u64, u32::from_le_bytes(root[10..14].try_into().ok()?) as usize);
+        for part in path {
+            let dir = self.read(cur.0, cur.1.min(256 * 1024))?;
+            let mut i = 0;
+            let mut found = None;
+            while i + 33 < dir.len() {
+                let len = dir[i] as usize;
+                if len == 0 {
+                    i = (i / 2048 + 1) * 2048;
+                    continue;
+                }
+                let nlen = dir[i + 32] as usize;
+                let name = String::from_utf8_lossy(&dir[i + 33..(i + 33 + nlen).min(dir.len())]).to_uppercase();
+                let name = name.split(';').next().unwrap_or("").to_string();
+                if name == part.to_uppercase() {
+                    found = Some((
+                        u32::from_le_bytes(dir[i + 2..i + 6].try_into().ok()?) as u64,
+                        u32::from_le_bytes(dir[i + 10..i + 14].try_into().ok()?) as usize,
+                    ));
+                    break;
+                }
+                i += len;
+            }
+            cur = found?;
+        }
+        Some(cur)
+    }
+
+    fn file(&mut self, path: &[&str], max: usize) -> Option<Vec<u8>> {
+        let (lba, size) = self.find(path)?;
+        self.read(lba, size.min(max))
+    }
+}
+
+/// The first data track of a .cue sheet.
+fn cue_first_bin(cue: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(cue).ok()?;
+    let line = text.lines().find(|l| l.trim_start().to_uppercase().starts_with("FILE"))?;
+    let name = line.split('"').nth(1).map(str::to_string).or_else(|| line.split_whitespace().nth(1).map(str::to_string))?;
+    Some(cue.parent()?.join(name))
+}
+
+/// PS1 / PS2 game code from SYSTEM.CNF, e.g. "SLUS-20062" (the format PCSX2 and DuckStation use).
+fn ps_serial(p: &Path) -> Option<String> {
+    let mut iso = Iso::open(p)?;
+    let cnf = iso.file(&["SYSTEM.CNF"], 4096)?;
+    let text = String::from_utf8_lossy(&cnf);
+    // PS2: BOOT2 = cdrom0:\SLUS_200.62;1   PS1: BOOT = cdrom:\SLUS_005.94;1
+    let line = text.lines().find(|l| l.trim_start().to_uppercase().starts_with("BOOT"))?;
+    let file = line.rsplit(['\\', ':']).next()?.split(';').next()?.trim();
+    let (pre, rest) = file.split_once(['_', '-'])?;
+    let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
+    if pre.len() == 4 && digits.len() == 5 {
+        Some(format!("{}-{}", pre.to_uppercase(), digits))
+    } else {
+        None
+    }
+}
+
+/// PSP disc ID from PSP_GAME/PARAM.SFO, e.g. "ULUS10336" (what PPSSPP uses).
+fn psp_disc_id(p: &Path) -> Option<String> {
     if p.extension()?.to_string_lossy().to_lowercase() != "iso" {
         return None;
     }
-    let mut f = File::open(p).ok()?;
-    let mut pvd = [0u8; 2048];
-    f.seek(SeekFrom::Start(16 * 2048)).ok()?;
-    f.read_exact(&mut pvd).ok()?;
-    if &pvd[1..6] != b"CD001" {
-        return None;
-    }
-    let root = &pvd[156..156 + 34];
-    let lba = u32::from_le_bytes([root[2], root[3], root[4], root[5]]) as u64;
-    let size = (u32::from_le_bytes([root[10], root[11], root[12], root[13]]) as usize).min(64 * 1024);
-    let mut dir = vec![0u8; size];
-    f.seek(SeekFrom::Start(lba * 2048)).ok()?;
-    f.read_exact(&mut dir).ok()?;
-    let mut i = 0;
-    while i + 33 < dir.len() {
-        let len = dir[i] as usize;
-        if len == 0 {
-            i = (i / 2048 + 1) * 2048;
-            continue;
-        }
-        let nlen = dir[i + 32] as usize;
-        let name = String::from_utf8_lossy(&dir[i + 33..(i + 33 + nlen).min(dir.len())]).to_uppercase();
-        if name.starts_with("SYSTEM.CNF") {
-            let elba = u32::from_le_bytes([dir[i + 2], dir[i + 3], dir[i + 4], dir[i + 5]]) as u64;
-            let esz = (u32::from_le_bytes([dir[i + 10], dir[i + 11], dir[i + 12], dir[i + 13]]) as usize).min(4096);
-            let mut cnf = vec![0u8; esz];
-            f.seek(SeekFrom::Start(elba * 2048)).ok()?;
-            f.read_exact(&mut cnf).ok()?;
-            let text = String::from_utf8_lossy(&cnf);
-            // BOOT2 = cdrom0:\SLUS_200.62;1
-            let line = text.lines().find(|l| l.trim_start().starts_with("BOOT2"))?;
-            let file = line.rsplit(['\\', ':']).next()?.split(';').next()?.trim();
-            let (pre, rest) = file.split_once('_')?;
-            let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
-            if pre.len() == 4 && digits.len() == 5 {
-                return Some(format!("{}-{}", pre.to_uppercase(), digits));
+    let mut iso = Iso::open(p)?;
+    let sfo = iso.file(&["PSP_GAME", "PARAM.SFO"], 64 * 1024)?;
+    parse_sfo(&sfo).into_iter().find(|(k, _)| k == "DISC_ID").map(|(_, v)| v.trim_end_matches('\0').to_string()).filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::*;
+    /// Builds a tiny ISO9660 image with SYSTEM.CNF and checks both sector layouts.
+    fn image(raw: bool) -> Vec<u8> {
+        let mut sectors = vec![[0u8; 2048]; 24];
+        let pvd = &mut sectors[16];
+        pvd[0] = 1;
+        pvd[1..6].copy_from_slice(b"CD001");
+        let mut rec = [0u8; 34];
+        rec[0] = 34;
+        rec[2..6].copy_from_slice(&20u32.to_le_bytes());
+        rec[10..14].copy_from_slice(&2048u32.to_le_bytes());
+        pvd[156..190].copy_from_slice(&rec);
+        let name = b"SYSTEM.CNF;1";
+        let dir = &mut sectors[20];
+        let l = 33 + name.len() + 1;
+        dir[0] = l as u8;
+        dir[2..6].copy_from_slice(&21u32.to_le_bytes());
+        let cnf = b"BOOT = cdrom:\\SLUS_005.94;1\r\nTCB = 4\r\n";
+        dir[10..14].copy_from_slice(&(cnf.len() as u32).to_le_bytes());
+        dir[32] = name.len() as u8;
+        dir[33..33 + name.len()].copy_from_slice(name);
+        sectors[21][..cnf.len()].copy_from_slice(cnf);
+        let mut out = Vec::new();
+        for s in sectors {
+            if raw {
+                out.extend_from_slice(&[0u8; 24]);
+                out.extend_from_slice(&s);
+                out.extend_from_slice(&[0u8; 280]);
+            } else {
+                out.extend_from_slice(&s);
             }
-            return None;
         }
-        i += len;
+        out
     }
-    None
+    #[test]
+    fn serials() {
+        let d = std::env::temp_dir();
+        let iso = d.join("nxe_t.iso");
+        std::fs::write(&iso, image(false)).unwrap();
+        assert_eq!(ps_serial(&iso).as_deref(), Some("SLUS-00594"));
+        let bin = d.join("nxe_t.bin");
+        std::fs::write(&bin, image(true)).unwrap();
+        let cue = d.join("nxe_t.cue");
+        std::fs::write(&cue, "FILE \"nxe_t.bin\" BINARY\n  TRACK 01 MODE2/2352\n").unwrap();
+        assert_eq!(ps_serial(&cue).as_deref(), Some("SLUS-00594"));
+    }
 }
 
 // ------------------------------------------------------------------ PC ports

@@ -83,6 +83,20 @@ pub enum RowId {
     FrameRate,
     ShowVersion,
     RaUsePic,
+    ButtonIcons,
+    SwitchLayout,
+    RestoreProfile,
+    MusicOn,
+    MusicVolume,
+    NextSong,
+    DiscordOn,
+    DiscordId,
+    CheckUpdates,
+    InstallUpdate,
+    GetPorts,
+    ExportProfile,
+    ImportProfile,
+    HiddenGames,
     Backend(System),
     InstallCore(System),
     Continue,
@@ -126,6 +140,7 @@ fn settings_cats() -> Vec<(String, Icon, String)> {
         ("Consoles".into(), Icon::Disc, "Set up each console: which emulator to use, where your games are, built-in cores and graphics settings.".into()),
         ("Profile".into(), Icon::Info, "Your name and gamerpic.".into()),
         ("Display".into(), Icon::Expand, "Theme colour, fullscreen, animation frame rate and sounds.".into()),
+        ("Controller".into(), Icon::Grid, "Xbox, PlayStation and Nintendo controllers: button icons and layout.".into()),
         ("Cover Art".into(), Icon::Image, "Download box art automatically and fix wrong covers.".into()),
         ("Achievements".into(), Icon::Trophy, "Sign in to RetroAchievements to see your points and progress.".into()),
         ("About".into(), Icon::Info, "Version and controls.".into()),
@@ -135,8 +150,9 @@ const CAT_GENERAL: usize = 0;
 const CAT_CONSOLES: usize = 1;
 const CAT_PROFILE: usize = 2;
 const CAT_DISPLAY: usize = 3;
-const CAT_COVERS: usize = 4;
-const CAT_ACH: usize = 5;
+const CAT_CONTROLLER: usize = 4;
+const CAT_COVERS: usize = 5;
+const CAT_ACH: usize = 6;
 const SETUP_STEPS: [&str; 4] = ["Welcome", "Gamerpic", "Emulators", "Cover Art"];
 
 fn emu_label(s: System) -> &'static str {
@@ -180,7 +196,55 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
         Kind::Settings if m.console.is_some() => console_rows(app, m.console.unwrap(), &mut v),
         Kind::Settings => match m.cat {
             CAT_GENERAL => {
+                match (&app.update, app.update_progress) {
+                    (_, Some(f)) => v.push(Row::new(RowId::None, "Updating…", Value::Text(format!("{:.0}%", f * 100.0)), "Downloading the new version. The launcher restarts by itself when it's done.")),
+                    (Some(rel), None) => v.push(Row::new(
+                        RowId::InstallUpdate,
+                        format!("Update to {}", rel.tag),
+                        Value::Text(format!("You have v{}", env!("CARGO_PKG_VERSION"))),
+                        "Downloads the new version from GitHub and restarts. Your settings, profile and games stay as they are.",
+                    )),
+                    _ => {}
+                }
                 v.push(Row::new(RowId::Rescan, "Rescan Library", Value::Action, format!("Look through your game folders again for new games. {} games found right now.", app.games.len())));
+                v.push(Row::new(
+                    RowId::CheckUpdates,
+                    "Check for Updates",
+                    onoff(cfg.check_updates),
+                    "Looks for a new NXE Launcher on GitHub when it starts. Nothing is installed unless you choose to.",
+                ));
+                v.push(Row::new(
+                    RowId::DiscordOn,
+                    "Discord Status",
+                    onoff(cfg.discord_status),
+                    "Shows \"Playing <game>\" on your Discord profile while you play. Needs the Discord app open and a Discord Application ID (below).",
+                ));
+                if cfg.discord_status {
+                    v.push(Row::new(
+                        RowId::DiscordId,
+                        "Discord Application ID",
+                        Value::Text(if cfg.discord_app_id.is_empty() { "Not set".into() } else { cfg.discord_app_id.clone() }),
+                        "One-time setup: go to discord.com/developers/applications, click New Application, name it NXE Launcher, then copy its Application ID here. The name you give it is what Discord shows (\"Playing NXE Launcher\").",
+                    ));
+                }
+                let pr = &app.profile;
+                v.push(Row::new(
+                    RowId::ExportProfile,
+                    "Save a Copy of My Profile",
+                    Value::Action,
+                    format!(
+                        "Your name, gamerpic, theme, play time ({}) and pinned/hidden games are kept in {}. It stays there if you delete the launcher, and Quick Setup offers to bring it back. Press A to save a copy somewhere else too (USB stick, cloud folder…).",
+                        crate::stats::fmt_secs(pr.total_secs()),
+                        crate::stats::path().to_string_lossy()
+                    ),
+                ));
+                v.push(Row::new(RowId::ImportProfile, "Load a Profile File", Value::Action, "Pick a profile file you saved before. Your name, gamerpic, theme and play time come back."));
+                v.push(Row::new(
+                    RowId::HiddenGames,
+                    "Hidden Games",
+                    Value::Text(if pr.hidden.is_empty() { "None".into() } else if cfg.show_hidden { format!("{} (showing)", pr.hidden.len()) } else { format!("{} (hidden)", pr.hidden.len()) }),
+                    "Games you hid with Y > Hide This Game. Press A to show or hide them on the dashboard; unhide one from its Details page (Y).",
+                ));
                 v.push(Row::new(RowId::RunSetup, "Quick Setup", Value::Action, "Go through the first-launch setup again: your name, theme, emulators and cover art."));
                 v.push(Row::new(RowId::OpenFile, "Open Settings File", Value::Action, format!("For advanced changes. Everything here is also saved in {}", config_path().to_string_lossy())));
                 v.push(Row::new(RowId::Exit, "Exit Dashboard", Value::Action, "Close NXE Launcher."));
@@ -223,12 +287,64 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                 v.push(Row::new(RowId::Fullscreen, "Fullscreen", onoff(cfg.fullscreen), "Run the dashboard fullscreen. F11 also switches it."));
                 v.push(Row::new(RowId::Sounds, "Menu Sounds", onoff(cfg.sounds), "Plays theme\\sounds\\*.wav when you move around."));
                 v.push(Row::new(RowId::ShowVersion, "Show Version Number", onoff(cfg.show_version), "Shows the launcher version in the bottom-right corner."));
+                let n_songs = crate::music::songs().len();
+                v.push(Row::new(
+                    RowId::MusicOn,
+                    "Background Music",
+                    onoff(cfg.music_on),
+                    format!(
+                        "Plays your own songs on the dashboard, like a 360 custom soundtrack. Put MP3, OGG, FLAC or WAV files in {} ({} found). Music fades out when a game starts.",
+                        crate::music::music_dir().to_string_lossy(),
+                        n_songs
+                    ),
+                ));
+                if cfg.music_on {
+                    v.push(Row::new(RowId::MusicVolume, "Music Volume", Value::Text(format!("{}%", cfg.music_volume)), "Press A to change the volume."));
+                    v.push(Row::new(RowId::NextSong, "Next Song", Value::Action, "Skip to another song."));
+                }
                 v.push(Row::new(
                     RowId::Minimize,
                     "Minimize While Playing",
                     onoff(cfg.minimize_while_playing),
                     "Hide the dashboard while a game runs. Off keeps it ready behind the game for a faster return.",
                 ));
+            }
+            CAT_CONTROLLER => {
+                let icons = match cfg.button_icons.as_str() {
+                    "xbox" => "Xbox",
+                    "playstation" => "PlayStation",
+                    "nintendo" => "Nintendo",
+                    _ => "Match My Controller",
+                };
+                v.push(Row::new(
+                    RowId::ButtonIcons,
+                    "Button Icons",
+                    Value::Text(icons.into()),
+                    "Which buttons the dashboard shows. Match My Controller switches to whatever you last pressed a button on: Xbox letters, PlayStation shapes or Nintendo letters.",
+                ));
+                v.push(Row::new(
+                    RowId::SwitchLayout,
+                    "Nintendo Controllers",
+                    Value::Text(if cfg.switch_layout { "A Confirms (Switch Style)".into() } else { "Bottom Button Confirms".into() }),
+                    "Switch Pro, Joy-Cons and other Nintendo pads: confirm with A (the right button) like on a Switch, or with the bottom button like on Xbox and PlayStation.",
+                ));
+                let pads = crate::input::CONNECTED.lock().map(|c| c.clone()).unwrap_or_default();
+                if pads.is_empty() {
+                    v.push(Row::note("No controller connected. Keyboard: arrows, Enter = A, Esc = B, Tab = Start."));
+                } else {
+                    for (name, st) in pads {
+                        let kind = match st {
+                            crate::input::Style::Xbox => "Xbox / generic",
+                            crate::input::Style::PlayStation => "PlayStation",
+                            crate::input::Style::PlayStation3 => "PlayStation 3",
+                            crate::input::Style::Nintendo => "Nintendo",
+                        };
+                        v.push(Row::new(RowId::None, name, Value::Text(kind.into()), "Connected."));
+                    }
+                }
+                v.push(Row::note("Joy-Cons: one on its own is held sideways. Connect both and they work together as one controller."));
+                v.push(Row::note("PS3 controllers on Windows need the free DsHidMini driver (SDF or DS4Windows mode); PS4 and PS5 controllers work as they are."));
+                v.push(Row::note("Guide / PS / Home button (or hold Back + Start for a second) opens the Guide menu in a game."));
             }
             CAT_COVERS => {
                 v.push(Row::new(
@@ -290,9 +406,9 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                     "A console-style dashboard for your emulators.",
                 ));
                 v.push(Row::note("D-pad / stick: move · A: select · B: back"));
-                v.push(Row::note("X: achievements · Y: change cover · Start: settings"));
+                v.push(Row::note("X: achievements · Y: game details · Start: settings"));
                 v.push(Row::note("Up / Down: switch channels"));
-                v.push(Row::note("In a game: Guide, or hold Back + Start, returns to the dashboard."));
+                v.push(Row::note("In a game: Guide (or hold Back + Start) opens the Guide menu."));
                 v.push(Row::note("Keyboard: arrows, Enter, Esc, Tab, X, C, F11."));
             }
         },
@@ -305,6 +421,19 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                 v.push(Row::new(RowId::Back, "Back", Value::Action, ""));
             }
             0 => {
+                if let Some(pr) = crate::stats::Profile::load_from(&crate::stats::path()).filter(|p| !p.gamertag.is_empty() && p.gamertag != app.cfg.gamertag) {
+                    v.push(Row::new(
+                        RowId::RestoreProfile,
+                        "Welcome Back! Restore My Profile",
+                        Value::Text(pr.gamertag.clone()),
+                        format!(
+                            "Found your profile from before: {}, {} played across {} game(s). Press A to bring back your name, gamerpic, theme and play time.",
+                            pr.gamertag,
+                            crate::stats::fmt_secs(pr.total_secs()),
+                            pr.games.len()
+                        ),
+                    ));
+                }
                 v.push(Row::note("Let's get your consoles ready. You can change everything later in Settings."));
                 v.push(Row::new(RowId::Gamertag, "Your Name", Value::Text(cfg.gamertag.clone()), "Shown in the corner of the dashboard. Press A to type."));
                 v.push(Row::new(RowId::Theme, "Theme", Value::Text(cap(&cfg.theme)), "Press A to switch colour."));
@@ -352,6 +481,12 @@ fn pc_rows(app: &App, s: System, v: &mut Vec<Row>) {
     let count = app.games.iter().filter(|g| g.system == s).count();
     v.push(Row::note(
         "Native PC versions of console games: recompilations like Zelda 64: Recompiled or Unleashed Recompiled, and ports like Ship of Harkinian. They run on their own, no emulator needed.",
+    ));
+    v.push(Row::new(
+        RowId::GetPorts,
+        "Get Ports",
+        Value::Action,
+        "Download and install PC ports (Zelda 64: Recompiled, Ship of Harkinian, Starship…) straight from their GitHub pages, and keep them updated. You bring your own game files.",
     ));
     v.push(Row::new(
         RowId::AddFolder(s),
@@ -628,6 +763,83 @@ impl App {
             }
             RowId::Gamerpic => self.open_pic_picker(),
             RowId::CustomPic => self.choose_custom_picture(frame, ctx),
+            RowId::MusicOn => {
+                self.cfg.music_on = !self.cfg.music_on;
+                self.cfg.save();
+            }
+            RowId::MusicVolume => {
+                self.cfg.music_volume = match self.cfg.music_volume {
+                    v if v >= 100 => 20,
+                    v => (v / 20 + 1) * 20,
+                };
+                self.cfg.save();
+            }
+            RowId::NextSong => {
+                let _ = self.music_tx.send(crate::music::Cmd::Rescan);
+                let _ = self.music_tx.send(crate::music::Cmd::Next);
+            }
+            RowId::DiscordOn => {
+                self.cfg.discord_status = !self.cfg.discord_status;
+                self.cfg.save();
+            }
+            RowId::DiscordId => self.start_edit(id, self.cfg.discord_app_id.clone()),
+            RowId::CheckUpdates => {
+                self.cfg.check_updates = !self.cfg.check_updates;
+                self.cfg.save();
+                if self.cfg.check_updates {
+                    let _ = self.net_tx.send(crate::net::Job::Check(vec![crate::net::SELF_REPO]));
+                }
+            }
+            RowId::InstallUpdate => {
+                if let Some(rel) = self.update.clone() {
+                    self.update_progress = Some(0.0);
+                    let _ = self.net_tx.send(crate::net::Job::UpdateSelf(rel));
+                }
+            }
+            RowId::GetPorts => self.open_ports_page(),
+            RowId::RestoreProfile => {
+                if let Some(pr) = crate::stats::Profile::load_from(&crate::stats::path()) {
+                    self.restore_profile(pr);
+                }
+            }
+            RowId::ExportProfile => {
+                let name = format!("NXE Profile - {}.json", self.cfg.gamertag.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], ""));
+                if let Some(p) = rfd::FileDialog::new().set_title("Save a copy of your profile").set_file_name(name).add_filter("Profile", &["json"]).set_parent(frame).save_file() {
+                    match self.profile.save_to(&p) {
+                        Ok(()) => self.toast("Profile saved"),
+                        Err(e) => self.toast(format!("Couldn't save: {e}")),
+                    }
+                }
+            }
+            RowId::ImportProfile => {
+                if let Some(p) = rfd::FileDialog::new().set_title("Load a profile file").add_filter("Profile", &["json"]).set_parent(frame).pick_file() {
+                    match crate::stats::Profile::load_from(&p) {
+                        Some(pr) => self.restore_profile(pr),
+                        None => self.toast("That isn't an NXE Launcher profile file"),
+                    }
+                }
+            }
+            RowId::HiddenGames => {
+                self.cfg.show_hidden = !self.cfg.show_hidden;
+                self.cfg.save();
+                self.rebuild();
+            }
+            RowId::ButtonIcons => {
+                self.cfg.button_icons = match self.cfg.button_icons.as_str() {
+                    "auto" => "xbox",
+                    "xbox" => "playstation",
+                    "playstation" => "nintendo",
+                    _ => "auto",
+                }
+                .into();
+                self.cfg.apply_controller();
+                self.cfg.save();
+            }
+            RowId::SwitchLayout => {
+                self.cfg.switch_layout = !self.cfg.switch_layout;
+                self.cfg.apply_controller();
+                self.cfg.save();
+            }
             RowId::RaUsePic => {
                 self.cfg.gamerpic = "ra".into();
                 self.cfg.save();
@@ -792,6 +1004,33 @@ impl App {
         }
     }
 
+    pub fn restore_profile(&mut self, pr: crate::stats::Profile) {
+        if !pr.gamertag.is_empty() {
+            self.cfg.gamertag = pr.gamertag.clone();
+        }
+        if !pr.theme.is_empty() {
+            self.set_theme(&pr.theme);
+        }
+        if !pr.ra_user.is_empty() && self.cfg.ra_user.is_empty() {
+            self.cfg.ra_user = pr.ra_user.clone();
+        }
+        if pr.gamerpic == "custom" && crate::stats::pic_path().is_file() {
+            let _ = std::fs::copy(crate::stats::pic_path(), crate::theme_dir().join("profile.png"));
+            self.cfg.gamerpic = "custom".into();
+            if let Some(ctx) = self.ctx().cloned() {
+                self.reload_custom_pic_ctx(&ctx);
+            }
+        } else if !pr.gamerpic.is_empty() && pr.gamerpic != "custom" {
+            self.cfg.gamerpic = pr.gamerpic.clone();
+        }
+        let games = pr.games.len();
+        self.profile = pr;
+        self.profile.save();
+        self.cfg.save();
+        self.rebuild();
+        self.toast(format!("Welcome back, {}! {} game(s) of play time restored", self.cfg.gamertag, games));
+    }
+
     pub fn add_exe(&mut self, s: System, frame: &eframe::Frame) {
         if let Some(p) = rfd::FileDialog::new().set_title("Choose the game's program (.exe)").add_filter("Program", &["exe"]).set_parent(frame).pick_file() {
             let st = p.to_string_lossy().to_string();
@@ -822,6 +1061,11 @@ impl App {
             }
             RowId::Args(s) => {
                 self.cfg.sys_mut(s).args = split_args(&e.text);
+            }
+            RowId::DiscordId => {
+                let id: String = e.text.chars().filter(|c| c.is_ascii_digit()).collect();
+                self.set_discord_id(id);
+                self.cfg.save();
             }
             RowId::RaUser => {
                 let u = e.text.trim().to_string();
@@ -1183,7 +1427,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         if let Some(e) = m.edit.as_mut() {
             let resp = egui::Area::new(egui::Id::unique("menu_edit"))
                 .fixed_pos(er.min)
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     ui.add_sized(
                         er.size(),
@@ -1671,5 +1915,333 @@ pub fn draw_dialog(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         list_row(&p, &f, i, label, None, i == d.sel, true, a, false);
     }
     BAR_EXTERNAL.with(|b| b.set(false));
+    hint_bar(&p, &[("A", "Select", BTN_A), ("B", "Back", BTN_B)], 100.0 * u, 650.0 * u, u, a);
+}
+
+// ---------------------------------------------------------------- game details (Y)
+
+pub struct Details {
+    pub game: usize,
+    pub sel: usize,
+    pub opened: Instant,
+    /// What the emulator itself recorded (read once when the page opens).
+    pub emu: Option<crate::playtime::EmuTime>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum DetailItem {
+    Play,
+    Pin,
+    Achievements,
+    Cover,
+    Hide,
+}
+
+impl App {
+    pub fn open_details(&mut self, gi: usize) {
+        let Some(g) = self.games.get(gi) else { return };
+        let emu = crate::playtime::emulator_time(g, self.cfg.emulator(g.system).as_deref());
+        self.details = Some(Details { game: gi, sel: 0, opened: Instant::now(), emu });
+        self.sounds.play("select");
+    }
+
+    pub fn detail_items(&self) -> Vec<DetailItem> {
+        let Some(d) = self.details.as_ref() else { return vec![] };
+        let mut v = vec![DetailItem::Play, DetailItem::Pin];
+        if self.ra_match.contains_key(&d.game) {
+            v.push(DetailItem::Achievements);
+        }
+        v.push(DetailItem::Cover);
+        v.push(DetailItem::Hide);
+        v
+    }
+
+    /// (total seconds, where it comes from, last played unix)
+    pub fn time_played(&self, gi: usize, emu: Option<&crate::playtime::EmuTime>) -> (u64, &'static str, Option<i64>) {
+        let ours = self.games.get(gi).and_then(|g| self.profile.stat(g)).cloned().unwrap_or_default();
+        let last = [emu.and_then(|e| e.last), (ours.last > 0).then_some(ours.last)].into_iter().flatten().max();
+        match emu {
+            // The emulator counts every session, also the ones started from NXE Launcher.
+            Some(e) if e.secs >= ours.secs => (e.secs, e.source, last),
+            _ => (ours.secs, "NXE Launcher", last),
+        }
+    }
+
+    pub fn details_input(&mut self, p: Pad) {
+        let items = self.detail_items();
+        let Some(d) = self.details.as_mut() else { return };
+        let gi = d.game;
+        match p {
+            Pad::Up if d.sel > 0 => {
+                d.sel -= 1;
+                self.sounds.play("move");
+            }
+            Pad::Down if d.sel + 1 < items.len() => {
+                d.sel += 1;
+                self.sounds.play("move");
+            }
+            Pad::B => {
+                self.details = None;
+                self.sounds.play("back");
+            }
+            Pad::A => match items.get(d.sel).copied() {
+                Some(DetailItem::Play) => {
+                    self.details = None;
+                    self.launch_game(gi);
+                }
+                Some(DetailItem::Pin) => {
+                    let g = self.games[gi].clone();
+                    let on = self.profile.toggle_pin(&g);
+                    self.profile.save();
+                    self.rebuild();
+                    self.sounds.play("select");
+                    self.toast(if on { "Pinned to Home" } else { "Unpinned" });
+                }
+                Some(DetailItem::Achievements) => self.open_achievements(gi),
+                Some(DetailItem::Cover) => self.open_picker(gi),
+                Some(DetailItem::Hide) => {
+                    let g = self.games[gi].clone();
+                    let hidden = self.profile.toggle_hidden(&g);
+                    self.profile.save();
+                    self.sounds.play("select");
+                    if hidden {
+                        self.details = None;
+                        self.toast("Hidden. Show it again in Settings > General > Hidden Games");
+                    } else {
+                        self.toast("Visible again");
+                    }
+                    self.rebuild();
+                }
+                None => {}
+            },
+            Pad::X => self.open_achievements(gi),
+            _ => {}
+        }
+    }
+}
+
+pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let Some(d) = app.details.as_ref() else { return };
+    let gi = d.game;
+    let Some(g) = app.games.get(gi).cloned() else { return };
+    let sel = d.sel;
+    let emu = d.emu.clone();
+    let a = (d.opened.elapsed().as_secs_f32() / 0.22).min(1.0);
+    let screen = ctx.content_rect();
+    let p = ui.painter_at(screen);
+    let f = frame360(&p, app, screen, &g.name, Some(g.system.channel()), a, true);
+    let u = f.u;
+    let items = app.detail_items();
+    let pinned = app.profile.is_pinned(&g);
+    let hidden = app.profile.is_hidden(&g);
+    for (i, it) in items.iter().enumerate() {
+        let label = match it {
+            DetailItem::Play => "Play",
+            DetailItem::Pin if pinned => "Unpin from Home",
+            DetailItem::Pin => "Pin to Home",
+            DetailItem::Achievements => "Achievements",
+            DetailItem::Cover => "Change Cover",
+            DetailItem::Hide if hidden => "Show This Game Again",
+            DetailItem::Hide => "Hide This Game",
+        };
+        list_row(&p, &f, i, label, None, i == sel, true, a, *it == DetailItem::Play);
+    }
+    // Right side: cover, then the facts.
+    let r = f.right;
+    let cover = app.cover(ctx, gi);
+    let ch = 190.0 * u;
+    let mut y = r.top() + 6.0 * u;
+    if let Some((tex, aspect, _)) = cover {
+        let cw = (ch * aspect).min(r.width() * 0.6);
+        let cr = Rect::from_min_size(pos2(r.left(), y), vec2(cw, cw / aspect.max(0.01)));
+        p.rect_filled(cr.translate(vec2(0.0, 4.0 * u)), 3.0 * u, Color32::from_black_alpha((70.0 * a) as u8));
+        p.image(tex, cr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+        y = cr.bottom() + 16.0 * u;
+    }
+    let (secs, source, last) = app.time_played(gi, emu.as_ref());
+    let ours = app.profile.stat(&g).cloned().unwrap_or_default();
+    let dim = Color32::from_rgb(178, 190, 202).gamma_multiply(a);
+    let fact = |y: &mut f32, k: &str, v: &str| {
+        p.text(pos2(r.left(), *y), Align2::LEFT_TOP, k, FontId::proportional(15.0 * u), dim);
+        p.text(pos2(r.left() + 140.0 * u, *y), Align2::LEFT_TOP, fit(&p, v, &FontId::proportional(17.0 * u), r.width() - 140.0 * u), FontId::proportional(17.0 * u), Color32::WHITE.gamma_multiply(a));
+        *y += 27.0 * u;
+    };
+    let src = if secs == 0 { String::new() } else { format!("  (from {source})") };
+    fact(&mut y, "Time Played", &format!("{}{}", crate::stats::fmt_secs(secs), src));
+    fact(&mut y, "Last Played", &last.map(crate::stats::fmt_date).unwrap_or_else(|| "Never".into()));
+    if ours.sessions > 0 {
+        fact(&mut y, "Played Here", &format!("{} time(s), {}", ours.sessions, crate::stats::fmt_secs(ours.secs)));
+    }
+    if let Some(id) = &g.id {
+        fact(&mut y, "Game ID", id);
+    }
+    if pinned {
+        fact(&mut y, "Pinned", "Yes, on Home");
+    }
+    let note = match (&emu, g.system) {
+        (Some(_), _) => String::new(),
+        (None, crate::systems::System::Ps2 | crate::systems::System::Ps1 | crate::systems::System::Psp) if g.id.is_none() => {
+            "This file's game ID can't be read (compressed image), so the emulator's own play time can't be matched.".into()
+        }
+        _ => String::new(),
+    };
+    if !note.is_empty() {
+        y += 4.0 * u;
+        para(&p, pos2(r.left(), y), &note, 14.0 * u, r.width(), dim);
+    }
+    p.text(
+        pos2(r.left(), f.panel.bottom() - 30.0 * u),
+        Align2::LEFT_CENTER,
+        fit(&p, &g.path.to_string_lossy(), &FontId::proportional(13.0 * u), r.width()),
+        FontId::proportional(13.0 * u),
+        Color32::from_white_alpha((120.0 * a) as u8),
+    );
+    hint_bar(&p, &[("A", "Select", BTN_A), ("B", "Back", BTN_B)], 100.0 * u, 650.0 * u, u, a);
+}
+
+// ---------------------------------------------------------------- Get Ports
+
+pub struct PortsPage {
+    pub sel: usize,
+    pub opened: Instant,
+}
+
+/// What A does on a port, and the text shown for it.
+fn port_status(app: &App, p: &crate::net::PortInfo) -> (String, bool) {
+    let st = app.ports.get(p.repo);
+    let inst = crate::net::installed_tag(p);
+    if let Some(f) = st.and_then(|s| s.progress) {
+        return (format!("Downloading {:.0}%", f * 100.0), false);
+    }
+    if st.map(|s| s.busy).unwrap_or(false) {
+        return ("Installing…".into(), false);
+    }
+    let latest = st.and_then(|s| s.latest.as_ref());
+    match (inst, latest) {
+        (Some(i), Some(Ok(r))) if crate::net::newer(&r.tag, &i) => (format!("Update to {}", r.tag), true),
+        (Some(i), _) => (format!("Installed {i}"), true),
+        (None, Some(Ok(r))) if r.windows_asset().is_some() => (format!("Install {}", r.tag), true),
+        (None, Some(Ok(_))) => ("No Windows download".into(), false),
+        (None, Some(Err(e))) if e.starts_with("No releases") => ("No releases yet".into(), false),
+        (None, Some(Err(e))) if e.contains("rate limit") => ("GitHub busy, try later".into(), false),
+        (None, Some(Err(_))) => ("Can't reach GitHub".into(), false),
+        (None, None) => ("Checking…".into(), false),
+    }
+}
+
+impl App {
+    pub fn ports_input(&mut self, p: Pad) {
+        let Some(pg) = self.ports_page.as_mut() else { return };
+        let n = crate::net::PORTS.len();
+        match p {
+            Pad::Up if pg.sel > 0 => {
+                pg.sel -= 1;
+                self.sounds.play("move");
+            }
+            Pad::Down if pg.sel + 1 < n => {
+                pg.sel += 1;
+                self.sounds.play("move");
+            }
+            Pad::B => {
+                self.ports_page = None;
+                self.sounds.play("back");
+            }
+            Pad::A => {
+                let port = &crate::net::PORTS[pg.sel];
+                let inst = crate::net::installed_tag(port);
+                let rel = self.ports.get(port.repo).and_then(|s| s.latest.clone()).and_then(|r| r.ok());
+                let update = match (&inst, &rel) {
+                    (Some(i), Some(r)) => crate::net::newer(&r.tag, i),
+                    _ => false,
+                };
+                if inst.is_some() && !update {
+                    // Installed and current: play it.
+                    let dir = crate::net::ports_dir().join(port.folder);
+                    if let Some(gi) = self.games.iter().position(|g| g.system == crate::systems::System::Pc && g.path.starts_with(&dir)) {
+                        self.ports_page = None;
+                        self.launch_game(gi);
+                    } else {
+                        self.toast("Installed, but no game program was found in its folder");
+                    }
+                    return;
+                }
+                let Some(rel) = rel else {
+                    self.toast("Still checking GitHub…");
+                    return;
+                };
+                if rel.windows_asset().is_none() {
+                    self.toast(format!("{} has no Windows download in its latest release", port.name));
+                    return;
+                }
+                let st = self.ports.entry(port.repo).or_default();
+                if st.busy {
+                    return;
+                }
+                st.busy = true;
+                st.progress = Some(0.0);
+                let _ = self.net_tx.send(crate::net::Job::InstallPort(port, rel));
+                self.sounds.play("select");
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn draw_ports(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let Some(pg) = app.ports_page.as_ref() else { return };
+    let sel = pg.sel;
+    let a = (pg.opened.elapsed().as_secs_f32() / 0.22).min(1.0);
+    let screen = ctx.content_rect();
+    let p = ui.painter_at(screen);
+    let f = frame360(&p, app, screen, "Get Ports", Some("PC Ports"), a, true);
+    let u = f.u;
+    let ports = crate::net::PORTS;
+    let visible = ((f.list.height() / f.row_h) as usize).max(1);
+    let top = sel.saturating_sub(visible.saturating_sub(1));
+    for (i, port) in ports.iter().enumerate().skip(top).take(visible) {
+        let r = list_row(&p, &f, i - top, port.name, None, i == sel, true, a, false);
+        let (status, _) = port_status(app, port);
+        let installed = crate::net::installed_tag(port).is_some();
+        let col = if status.starts_with("Update") {
+            Color32::from_rgb(255, 214, 90)
+        } else if installed {
+            Color32::from_rgb(170, 230, 110)
+        } else {
+            Color32::from_rgb(200, 210, 220)
+        };
+        p.text(pos2(r.right() - 12.0 * u, r.center().y), Align2::RIGHT_CENTER, status, FontId::proportional(15.0 * u), col.gamma_multiply(a));
+    }
+    arrows(&p, &f, top > 0, top + visible < ports.len(), a);
+    let port = &ports[sel];
+    let r = f.right;
+    let w = r.width();
+    let mut y = r.top();
+    y += para(&p, pos2(r.left(), y), port.about, 19.0 * u, w, Color32::WHITE.gamma_multiply(a)) + 14.0 * u;
+    p.text(pos2(r.left(), y), Align2::LEFT_TOP, "You need", FontId::proportional(15.0 * u), Color32::from_rgb(178, 190, 202).gamma_multiply(a));
+    y += 22.0 * u;
+    y += para(&p, pos2(r.left(), y), port.needs, 16.0 * u, w, Color32::from_rgb(225, 232, 238).gamma_multiply(a)) + 14.0 * u;
+    let (status, can) = port_status(app, port);
+    let what = if !can {
+        status.clone()
+    } else if status.starts_with("Installed") {
+        "Press A to play it. Find it in the PC Ports channel too.".to_string()
+    } else if status.starts_with("Update") {
+        format!("Press A to {}. Your settings and saves in its folder are kept.", status.to_lowercase())
+    } else {
+        format!("Press A to {} into the launcher's ports folder.", status.to_lowercase())
+    };
+    y += para(&p, pos2(r.left(), y), &what, 16.0 * u, w, Color32::from_rgb(178, 220, 120).gamma_multiply(a)) + 10.0 * u;
+    if let Some(Some(Ok(rel))) = app.ports.get(port.repo).map(|s| s.latest.clone()) {
+        if let Some((name, _, size)) = rel.windows_asset() {
+            para(&p, pos2(r.left(), y), &format!("Download: {name} ({:.0} MB)", *size as f64 / 1_048_576.0), 13.0 * u, w, Color32::from_white_alpha((140.0 * a) as u8));
+        }
+    }
+    p.text(
+        pos2(r.left(), f.panel.bottom() - 30.0 * u),
+        Align2::LEFT_CENTER,
+        format!("github.com/{}", port.repo),
+        FontId::proportional(13.0 * u),
+        Color32::from_white_alpha((120.0 * a) as u8),
+    );
     hint_bar(&p, &[("A", "Select", BTN_A), ("B", "Back", BTN_B)], 100.0 * u, 650.0 * u, u, a);
 }

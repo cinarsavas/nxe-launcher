@@ -461,7 +461,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             if app.focused_progress().is_some() {
                 hints.push(("X", "Achievements", BTN_X));
             }
-            hints.push(("Y", "Change Cover", BTN_Y));
+            hints.push(("Y", "Details", BTN_Y));
         }
         hints.push(("START", "Settings", BTN_GREY));
         hint_bar(&p, &hints, 100.0 * u, 650.0 * u, u, seg(it, 1.0, 0.4));
@@ -533,7 +533,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some((el, name)) = app.launching() {
         overlay((el / 0.5).min(1.0), &name, "Starting…");
     } else if let Some(name) = app.playing() {
-        overlay(0.92, name, "Playing. Press Guide or hold Back + Start to return");
+        overlay(0.92, name, "Playing. Press Guide (or hold Back + Start) for the Guide menu");
     } else if let Some(el) = app.returned() {
         p.rect_filled(screen, 0.0, Color32::from_black_alpha(((1.0 - el / 0.45).clamp(0.0, 1.0).powi(2) * 255.0) as u8));
     }
@@ -552,24 +552,111 @@ pub const BTN_Y: Color32 = Color32::from_rgb(232, 180, 20);
 pub const BTN_GREY: Color32 = Color32::from_rgb(90, 96, 104);
 
 /// Controller-style button hints, left-aligned at (x, y).
+/// One controller button, drawn for the controller in use (Xbox letters, PlayStation shapes,
+/// Nintendo letters). `key` is the dashboard's name for it: A, B, X, Y, START, LB, RB, BACK.
+/// Returns the right edge.
+pub fn button_glyph(p: &egui::Painter, key: &str, x: f32, y: f32, u: f32, alpha: f32) -> f32 {
+    use crate::input::Style;
+    let style = crate::input::style();
+    let a = |c: Color32| c.gamma_multiply(alpha);
+    let pill = |label: &str, col: Color32| {
+        let g = p.layout_no_wrap(label.to_string(), FontId::proportional(10.0 * u), a(Color32::WHITE));
+        let r = Rect::from_min_size(pos2(x, y - 9.0 * u), vec2(g.size().x + 14.0 * u, 18.0 * u));
+        p.rect_filled(r, CornerRadius::same((9.0 * u) as u8), a(col));
+        p.galley(r.center() - g.size() * 0.5, g, Color32::WHITE);
+        r.right()
+    };
+    let disc = |fill: Color32| {
+        let c = pos2(x + 11.0 * u, y);
+        p.circle_filled(c + vec2(0.0, 1.5 * u), 11.0 * u, Color32::from_black_alpha((80.0 * alpha) as u8));
+        p.circle_filled(c, 11.0 * u, a(fill));
+        p.circle_filled(c - vec2(0.0, 4.0 * u), 6.0 * u, Color32::from_white_alpha((40.0 * alpha) as u8));
+        c
+    };
+    let letter = |fill: Color32, l: &str, ink: Color32| {
+        let c = disc(fill);
+        p.text(c, Align2::CENTER_CENTER, l, FontId::proportional(13.0 * u), a(ink));
+        c.x + 11.0 * u
+    };
+    let grey = Color32::from_rgb(70, 74, 80);
+    match style {
+        Style::Xbox => match key {
+            "A" => letter(BTN_A, "A", Color32::WHITE),
+            "B" => letter(BTN_B, "B", Color32::WHITE),
+            "X" => letter(BTN_X, "X", Color32::WHITE),
+            "Y" => letter(BTN_Y, "Y", Color32::WHITE),
+            "LB" | "RB" | "START" | "BACK" => pill(key, grey),
+            k => pill(k, grey),
+        },
+        Style::PlayStation | Style::PlayStation3 => {
+            let dark = Color32::from_rgb(34, 37, 43);
+            let shape = |which: u8, col: Color32| {
+                let c = disc(dark);
+                let st = Stroke::new(1.8 * u, a(col));
+                let r = 5.0 * u;
+                match which {
+                    0 => {
+                        p.line_segment([c + vec2(-r, -r), c + vec2(r, r)], st);
+                        p.line_segment([c + vec2(-r, r), c + vec2(r, -r)], st);
+                    }
+                    1 => {
+                        p.circle_stroke(c, r + 0.5 * u, st);
+                    }
+                    2 => {
+                        p.rect_stroke(Rect::from_center_size(c, vec2(r * 1.8, r * 1.8)), 0.0, st, egui::StrokeKind::Middle);
+                    }
+                    _ => {
+                        let pts = vec![c + vec2(0.0, -r * 1.1), c + vec2(r * 1.1, r * 0.8), c + vec2(-r * 1.1, r * 0.8)];
+                        p.add(Shape::closed_line(pts, st));
+                    }
+                }
+                c.x + 11.0 * u
+            };
+            let ps3 = style == Style::PlayStation3;
+            match key {
+                "A" => shape(0, Color32::from_rgb(124, 166, 240)),
+                "B" => shape(1, Color32::from_rgb(240, 96, 88)),
+                "X" => shape(2, Color32::from_rgb(232, 128, 214)),
+                "Y" => shape(3, Color32::from_rgb(64, 206, 168)),
+                "LB" => pill("L1", grey),
+                "RB" => pill("R1", grey),
+                "START" => pill(if ps3 { "START" } else { "OPTIONS" }, grey),
+                "BACK" => pill(if ps3 { "SELECT" } else { "SHARE" }, grey),
+                k => pill(k, grey),
+            }
+        }
+        Style::Nintendo => {
+            let dark = Color32::from_rgb(44, 47, 51);
+            // Switch layout: confirm is A (right). Otherwise the bottom button (labelled B) confirms.
+            let sw = crate::input::SWITCH_LAYOUT.load(std::sync::atomic::Ordering::Relaxed);
+            let lab = |k: &str| -> &'static str {
+                match (k, sw) {
+                    ("A", true) => "A",
+                    ("B", true) => "B",
+                    ("X", true) => "X",
+                    ("Y", true) => "Y",
+                    ("A", false) => "B",
+                    ("B", false) => "A",
+                    ("X", false) => "Y",
+                    _ => "X",
+                }
+            };
+            match key {
+                "A" | "B" | "X" | "Y" => letter(dark, lab(key), Color32::WHITE),
+                "LB" => pill("L", grey),
+                "RB" => pill("R", grey),
+                "START" => letter(dark, "+", Color32::WHITE),
+                "BACK" => letter(dark, "-", Color32::WHITE),
+                k => pill(k, grey),
+            }
+        }
+    }
+}
+
 pub fn hint_bar(p: &egui::Painter, hints: &[(&str, &str, Color32)], x: f32, y: f32, u: f32, alpha: f32) {
     let mut x = x;
-    for (letter, label, col) in hints {
-        let col = col.gamma_multiply(alpha);
-        if letter.chars().count() > 1 {
-            let g = p.layout_no_wrap(letter.to_string(), FontId::proportional(10.0 * u), Color32::WHITE.gamma_multiply(alpha));
-            let r = Rect::from_min_size(pos2(x, y - 9.0 * u), vec2(g.size().x + 14.0 * u, 18.0 * u));
-            p.rect_filled(r, CornerRadius::same((9.0 * u) as u8), col);
-            p.galley(r.center() - g.size() * 0.5, g, Color32::WHITE);
-            x = r.right() + 6.0 * u;
-        } else {
-            let c = pos2(x + 11.0 * u, y);
-            p.circle_filled(c + vec2(0.0, 1.5 * u), 11.0 * u, Color32::from_black_alpha((80.0 * alpha) as u8));
-            p.circle_filled(c, 11.0 * u, col);
-            p.circle_filled(c - vec2(0.0, 4.0 * u), 6.0 * u, Color32::from_white_alpha((50.0 * alpha) as u8));
-            p.text(c, Align2::CENTER_CENTER, *letter, FontId::proportional(13.0 * u), Color32::WHITE.gamma_multiply(alpha));
-            x = c.x + 18.0 * u;
-        }
+    for (key, label, _col) in hints {
+        x = button_glyph(p, key, x, y, u, alpha) + 7.0 * u;
         let g = p.layout_no_wrap(label.to_string(), FontId::proportional(18.0 * u), Color32::WHITE.gamma_multiply(alpha));
         let lw = g.size().x;
         p.galley(pos2(x + 1.0, y - g.size().y * 0.5 + 1.5), p.layout_no_wrap(label.to_string(), FontId::proportional(18.0 * u), Color32::from_black_alpha((90.0 * alpha) as u8)), Color32::BLACK);
@@ -732,4 +819,86 @@ fn icon(p: &egui::Painter, kind: Icon, c: Pos2, r: f32, col: Color32) {
             p.line_segment([c + vec2(0.0, -r * 0.12), c + vec2(0.0, r * 0.5)], Stroke::new(r * 0.18, col));
         }
     }
+}
+
+/// The in-game Guide: a small panel over the game with Resume / Achievements / Quit.
+pub fn draw_guide(app: &App, ui: &egui::Ui, ctx: &egui::Context) {
+    use crate::GuideItem;
+    let Some(g) = app.guide.as_ref() else { return };
+    let screen = ctx.content_rect();
+    let (w, h) = (screen.width(), screen.height());
+    let u = (h / 720.0).min(w / 1280.0);
+    let p = ui.painter_at(screen);
+    let t = g.opened.elapsed().as_secs_f32();
+    let a = seg(t, 0.0, 0.22);
+    let th = app.theme_now();
+    p.rect_filled(screen, 0.0, Color32::from_black_alpha((150.0 * a) as u8));
+    // Panel grows in slightly, like the other pages.
+    let s = 0.94 + 0.06 * ease_out(seg(t, 0.0, 0.3));
+    let rows = app.guide_items().len() as f32;
+    let size = vec2(560.0, 86.0 + 22.0 + rows * 62.0 + 58.0) * u * s;
+    let r = Rect::from_center_size(screen.center(), size);
+    p.rect_filled(r.translate(vec2(0.0, 6.0 * u)), 8.0 * u, Color32::from_black_alpha((90.0 * a) as u8));
+    p.rect_filled(r, 8.0 * u, Color32::from_rgb(58, 70, 84).gamma_multiply(a));
+    // Header in the theme colour with the gamerpic, name and clock (like the 360 Guide).
+    let head = Rect::from_min_size(r.min, vec2(r.width(), 86.0 * u));
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(head.left_top(), th.sky_top.gamma_multiply(a));
+    mesh.colored_vertex(head.right_top(), th.sky_top.gamma_multiply(a));
+    mesh.colored_vertex(head.right_bottom(), th.sky_mid.gamma_multiply(a));
+    mesh.colored_vertex(head.left_bottom(), th.sky_mid.gamma_multiply(a));
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.with_clip_rect(head).add(Shape::mesh(mesh));
+    let pic = Rect::from_min_size(head.min + vec2(18.0 * u, 13.0 * u), vec2(60.0 * u, 60.0 * u));
+    crate::profile::draw_current(app, &p, pic, a);
+    p.rect_stroke(pic, 3.0 * u, Stroke::new(1.5 * u, Color32::from_white_alpha((140.0 * a) as u8)), egui::StrokeKind::Inside);
+    text_shadow(&p, pos2(pic.right() + 14.0 * u, pic.top() + 18.0 * u), Align2::LEFT_CENTER, &app.cfg.gamertag, 24.0 * u, mul(Color32::WHITE, a));
+    let clock = chrono::Local::now().format("%H:%M").to_string();
+    text_shadow(&p, pos2(head.right() - 18.0 * u, pic.top() + 18.0 * u), Align2::RIGHT_CENTER, &clock, 22.0 * u, mul(Color32::WHITE, a));
+    let game = app.playing().unwrap_or("Game").to_string();
+    let played = app.guide_play_time().map(|d| fmt_duration(d)).unwrap_or_default();
+    p.text(
+        pos2(pic.right() + 14.0 * u, pic.bottom() - 12.0 * u),
+        Align2::LEFT_CENTER,
+        fit(&p, &format!("Playing {game} · {played}"), &FontId::proportional(16.0 * u), r.width() - 120.0 * u),
+        FontId::proportional(16.0 * u),
+        mul(Color32::from_white_alpha(225), a),
+    );
+    // Rows.
+    let items = app.guide_items();
+    let mut y = head.bottom() + 22.0 * u;
+    for (i, it) in items.iter().enumerate() {
+        let (label, desc) = match it {
+            GuideItem::Resume => ("Resume Game", "Go back to the game."),
+            GuideItem::Achievements => ("Achievements", "See this game's achievements."),
+            GuideItem::Quit if g.confirm_quit && g.sel == i => ("Quit Game? Press A Again", "Unsaved progress is lost. B to cancel."),
+            GuideItem::Quit => ("Quit Game", "Close the game and return to the dashboard."),
+        };
+        let row = Rect::from_min_size(pos2(r.left() + 18.0 * u, y), vec2(r.width() - 36.0 * u, 54.0 * u));
+        if i == g.sel {
+            let bar = if matches!(it, GuideItem::Quit) && g.confirm_quit { Color32::from_rgb(196, 58, 48) } else { Color32::from_rgb(110, 172, 38) };
+            p.rect_filled(row, 4.0 * u, bar.gamma_multiply(a));
+            p.rect_filled(Rect::from_min_size(row.min, vec2(row.width(), row.height() * 0.5)), 4.0 * u, Color32::from_white_alpha((28.0 * a) as u8));
+        }
+        p.text(pos2(row.left() + 16.0 * u, row.top() + 19.0 * u), Align2::LEFT_CENTER, label, FontId::proportional(21.0 * u), mul(Color32::WHITE, a));
+        p.text(pos2(row.left() + 16.0 * u, row.top() + 40.0 * u), Align2::LEFT_CENTER, desc, FontId::proportional(14.0 * u), mul(Color32::from_white_alpha(200), a));
+        y += 62.0 * u;
+    }
+    hint_bar(&p, &[("A", "Select", BTN_A), ("B", "Resume", BTN_B)], r.left() + 18.0 * u, r.bottom() - 26.0 * u, u, a);
+}
+
+pub fn fmt_duration(d: std::time::Duration) -> String {
+    let m = d.as_secs() / 60;
+    if m < 1 {
+        "under a minute".into()
+    } else if m < 60 {
+        format!("{m} min")
+    } else {
+        format!("{}h {:02}m", m / 60, m % 60)
+    }
+}
+
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }

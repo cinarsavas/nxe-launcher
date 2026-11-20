@@ -62,6 +62,21 @@ pub struct Config {
     pub frame_rate: u32,
     /// Show "NXE Launcher vX" in the bottom-right corner.
     pub show_version: bool,
+    /// Button icons: "auto" (follow the controller), "xbox", "playstation", "nintendo".
+    pub button_icons: String,
+    /// Nintendo controllers confirm with A (right button), like a Switch.
+    pub switch_layout: bool,
+    /// Show games you hid.
+    pub show_hidden: bool,
+    /// Your songs from theme\music on the dashboard.
+    pub music_on: bool,
+    /// 0-100
+    pub music_volume: u32,
+    /// Show what you're playing in Discord.
+    pub discord_status: bool,
+    /// Your Discord application's ID (discord.com/developers).
+    pub discord_app_id: String,
+    pub check_updates: bool,
     /// RetroAchievements username + session token (the password is never stored).
     pub ra_user: String,
     pub ra_token: String,
@@ -91,6 +106,14 @@ impl Default for Config {
             gamerpic: "builtin:0".into(),
             frame_rate: 0,
             show_version: false,
+            button_icons: "auto".into(),
+            switch_layout: true,
+            show_hidden: false,
+            music_on: true,
+            music_volume: 60,
+            discord_status: true,
+            discord_app_id: String::new(),
+            check_updates: true,
             ra_user: String::new(),
             ra_token: String::new(),
             recent: vec![],
@@ -222,6 +245,19 @@ impl Config {
                 None => Launcher::None,
             },
         }
+    }
+
+    /// Push the controller settings to the input thread.
+    pub fn apply_controller(&self) {
+        use std::sync::atomic::Ordering;
+        let o = match self.button_icons.as_str() {
+            "xbox" => 1,
+            "playstation" => 2,
+            "nintendo" => 3,
+            _ => 0,
+        };
+        crate::input::OVERRIDE.store(o, Ordering::Relaxed);
+        crate::input::SWITCH_LAYOUT.store(self.switch_layout, Ordering::Relaxed);
     }
 
     pub fn push_recent(&mut self, path: &str) {

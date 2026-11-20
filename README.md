@@ -197,6 +197,50 @@ Native PC versions of console games (recompilations such as Zelda 64: Recompiled
 
 RecompLauncher (recomplauncher.com) has no desktop app yet; once it ships, its library can be imported the same way.
 
+## Controllers
+Xbox, PlayStation 3/4/5, Switch Pro, Joy-Cons and most other gamepads work. The button icons on screen follow the controller you last pressed a button on: Xbox letters, PlayStation shapes or Nintendo letters (Settings → Controller lets you fix one style).
+
+- **Nintendo controllers** confirm with A (the right button) like on a Switch; switch to "bottom button confirms" in Settings → Controller if you prefer.
+- **Joy-Cons:** one on its own is held sideways; connect both and they work together as one upright controller.
+- **PS3 controllers on Windows** need the free DsHidMini driver (SDF or DS4Windows mode). PS4 and PS5 controllers work as they are.
+
+## In a game: the Guide menu
+Press Guide / PS / Home (or hold Back + Start for a second). A small menu opens over the game: **Resume Game**, **Achievements** (when the game has a RetroAchievements set) and **Quit Game** (asks once more before closing, so you don't lose progress by accident).
+
+## Game details, play time, pins
+Highlight a game and press **Y** (keyboard: C):
+- **Time Played** and **Last Played.** NXE Launcher measures the time of every game it starts. It also reads the play time the emulators keep themselves, so time played before you used NXE Launcher counts too; whichever is higher is shown, with where it came from:
+
+| Emulator | File it reads | Matched by |
+|---|---|---|
+| PCSX2 | `inis\playtime.dat` | disc serial (read from the .iso / .bin) |
+| DuckStation | `playtime.dat` in its data folder | disc serial |
+| RPCS3 | `GuiConfigs\persistent_settings.dat` | title ID |
+| Dolphin | `Config\TimePlayed.ini` | 6-character game ID |
+| PPSSPP | `[PlayTime]` in `ppsspp.ini` | disc ID (from the .iso) |
+| Eden / Citron / Sudachi / yuzu | `play_time\*.bin` | title ID |
+| Ryujinx | `games\<title id>\gui\metadata.json` | title ID |
+
+  Compressed images (CHD, CSO) don't expose the serial, so for those only NXE Launcher's own time is shown. Xenia, xemu, melonDS, Azahar and RMG don't record play time.
+- **Pin to Home** puts the game at the front of the Home channel.
+- **Hide This Game** removes it from the dashboard (Settings → General → Hidden Games shows them again).
+- **Change Cover**, **Achievements**.
+
+## Get Ports
+PC Ports channel → **Get More Ports** (or Settings → Consoles → PC Ports → Get Ports) lists well-known ports — Zelda 64: Recompiled, Ship of Harkinian, 2 Ship 2 Harkinian, Starship, Spaghetti Kart, Banjo: Recompiled, Goemon 64: Recompiled, SM64 Co-op DX, Unleashed Recompiled, Marathon Recompiled, Dusk. Press A to download the latest Windows release from the project's GitHub page into the launcher's `ports` folder; when a new version comes out the row says **Update** and A updates it (the port's own settings and saves are kept). You always bring your own game files; each entry says which.
+
+## Your profile file
+Your name, gamerpic, theme, play time, pinned and hidden games are kept in **Documents\NXE Launcher\profile.json** — outside the launcher's folder, so they survive deleting or moving it. When you set the launcher up again, Quick Setup says **Welcome Back! Restore My Profile**. Settings → General can also save a copy anywhere (USB stick, cloud folder) and load one. Your RetroAchievements password/token is never stored in it.
+
+## Discord status
+Settings → General → Discord Status shows "Playing <game> · <console>" on your Discord profile. One-time setup: at discord.com/developers/applications click **New Application**, name it *NXE Launcher*, and copy its **Application ID** into Settings → General → Discord Application ID. The Discord desktop app must be running.
+
+## Background music
+Put MP3, OGG, FLAC or WAV files in `theme\music` and they play shuffled on the dashboard, like a 360 custom soundtrack. They fade out when a game starts and come back afterwards. Settings → Display: on/off, volume, next song.
+
+## Updates
+NXE Launcher checks GitHub for a new version when it starts (Settings → General → Check for Updates). Nothing installs on its own: **Update to vX** downloads it, swaps the exe and restarts. Settings, profile and games stay.
+
 ## License
 MIT, see `LICENSE`. Trademarks belong to their owners.
 
