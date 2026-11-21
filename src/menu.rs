@@ -2197,7 +2197,9 @@ pub fn draw_details(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut y = y.max(cover_bottom + 8.0 * u);
     let note = match (&emu, g.system) {
         (Some(_), _) => String::new(),
-        (None, crate::systems::System::Ps2 | crate::systems::System::Ps1 | crate::systems::System::Psp) if g.id.is_none() => {
+        (None, crate::systems::System::Ps2 | crate::systems::System::Ps1 | crate::systems::System::Psp)
+            if g.id.is_none() && g.path.extension().map(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "chd" | "cso" | "zso" | "pbp")).unwrap_or(false) =>
+        {
             "This file's game ID can't be read (compressed image), so the emulator's own play time can't be matched.".into()
         }
         _ => String::new(),

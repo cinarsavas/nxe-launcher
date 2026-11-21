@@ -323,6 +323,10 @@ impl App {
         app.user_pics = profile::load_user_pics(&cc.egui_ctx, &profile::gamerpic_dirs(&app), &[]);
         app.load_cached_ra_avatar(&cc.egui_ctx);
         app.cfg.apply_controller();
+        // For screenshots of the pop-up.
+        if let Ok(t) = std::env::var("NXE_DEMO_UNLOCK") {
+            app.unlocks.push_back(ra::Achievement { title: t, desc: String::new(), points: 25, badge: String::new(), earned: true, hardcore: false });
+        }
         app.theme_from = scene::theme(&app.cfg.theme);
         if !setup {
             app.intro = Some(Instant::now());

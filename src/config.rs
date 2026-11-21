@@ -146,7 +146,9 @@ impl Config {
         match std::fs::read_to_string(&path) {
             Ok(s) => {
                 let mut c: Config = toml::from_str(&s).unwrap_or_else(|e| {
+                    // Keep the file that couldn't be read instead of overwriting it later.
                     eprintln!("config parse error, using defaults: {e}");
+                    let _ = std::fs::copy(&path, path.with_extension(format!("toml.broken-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))));
                     Self::default()
                 });
                 let mut migrated = false;

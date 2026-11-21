@@ -905,7 +905,8 @@ fn ease_out(t: f32) -> f32 {
 
 /// 360-style "Achievement unlocked" pop-up at the bottom of the screen, one after another.
 pub fn draw_unlock(app: &mut App, ui: &egui::Ui, ctx: &egui::Context) {
-    if app.playing().is_some() || app.unlocks.is_empty() {
+    // Wait for the intro to finish and never show over a game.
+    if app.playing().is_some() || app.unlocks.is_empty() || app.intro_t().map(|t| t < 2.2).unwrap_or(false) {
         return;
     }
     const SHOW: f32 = 4.5;
