@@ -254,11 +254,19 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             c.tiles.iter().skip(lo).take(9).filter_map(|t| t.art.or(t.game)).collect::<Vec<_>>()
         })
         .collect();
+    // Covers too small to fill a tile (tiny icons) are always shown whole.
+    let mut small: std::collections::HashSet<usize> = Default::default();
     for gi in wanted {
         if let Some(t) = app.cover(ctx, gi) {
             covers.insert(gi, t);
+            if let Some(Some((h, _))) = app.covers.get(&gi) {
+                if h.size()[0].min(h.size()[1]) < 180 {
+                    small.insert(gi);
+                }
+            }
         }
     }
+    let fill_covers = app.cfg.cover_style != "whole";
 
     let screen = ctx.content_rect();
     let p = ui.painter_at(screen);
@@ -395,7 +403,31 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             // Gloss across the top.
             p.add(grad_rect(Rect::from_min_max(r.min, pos2(r.right(), r.top() + thh * 0.45)), mul(Color32::WHITE, a * 0.16), Color32::TRANSPARENT));
 
-            if let Some((tex, aspect, _)) = art {
+            let art_gi = tile.art.or(tile.game);
+            let fill = fill_covers && art.is_some() && !art_gi.map(|g| small.contains(&g)).unwrap_or(true);
+            if let (true, Some((tex, aspect, _))) = (fill, art) {
+                // Fill: crop the art to the tile (a little above centre, where titles usually are).
+                let rt = tw / thh;
+                let uv = if aspect > rt {
+                    let w_ = rt / aspect;
+                    Rect::from_min_max(pos2((1.0 - w_) * 0.5, 0.0), pos2((1.0 + w_) * 0.5, 1.0))
+                } else {
+                    let h_ = aspect / rt;
+                    let y0 = (1.0 - h_) * 0.3;
+                    Rect::from_min_max(pos2(0.0, y0), pos2(1.0, y0 + h_))
+                };
+                p.image(tex, r, uv, mul(Color32::WHITE, a * dim));
+                // Dark fade at the bottom so the labels stay readable.
+                let fade = Rect::from_min_max(pos2(r.left(), r.bottom() - thh * 0.42), r.max);
+                p.add(grad_rect(fade, Color32::TRANSPARENT, mul(Color32::from_black_alpha(200), a)));
+                p.add(grad_rect(Rect::from_min_max(r.min, pos2(r.right(), r.top() + thh * 0.3)), mul(Color32::WHITE, a * 0.10), Color32::TRANSPARENT));
+                // Reflection: the bottom of the art, flipped.
+                let rr = Rect::from_min_size(pos2(r.left(), r.bottom() + 2.0 * u), vec2(tw, thh * 0.25));
+                if rr.top() < h {
+                    let ruv = Rect::from_min_max(pos2(uv.left(), uv.bottom()), pos2(uv.right(), uv.bottom() - uv.height() * 0.25));
+                    p.add(tex_rect(tex, rr, ruv, mul(Color32::WHITE, a * 0.14), Color32::TRANSPARENT));
+                }
+            } else if let Some((tex, aspect, _)) = art {
                 let pad = 14.0 * u * s;
                 let bw = tw - pad * 2.0;
                 let bh = thh * 0.70;

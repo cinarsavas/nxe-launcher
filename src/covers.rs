@@ -2,9 +2,13 @@
 //! "choose a cover" picker.
 //!
 //! Sources
-//! - libretro-thumbnails box art (Xbox 360, PS3, PS2), matched by name (fuzzy)
+//! - libretro-thumbnails box art, title screens and screenshots, matched by name (fuzzy)
 //! - PS2 covers by disc serial (the set PCSX2's own cover downloader uses)
-//! - Switch icons/banners by title ID (api.nlib.cc)
+//! - GameCube covers by disc ID (GameTDB)
+//! - Switch: eShop icon, banner and screenshots from blawar/titledb, by title ID or name,
+//!   plus api.nlib.cc by title ID
+//! - PC: a port's own art from its repository, the .exe's icon, the original game's box art,
+//!   and Steam store art by name
 //! - whatever came with the game (GOD thumbnail, PS3 ICON0)
 //!
 //! Files
@@ -140,10 +144,12 @@ fn handle(
         Job::Candidates(req, g) => {
             let mut out: Vec<(String, Vec<u8>)> = Vec::new();
             if let Some(e) = &g.embedded {
-                out.push(("From the game files".into(), e.clone()));
+                out.push(("From the game files\tBuilt-in art".into(), e.clone()));
             }
-            for c in net.candidates(&g, 8) {
-                if let Some(b) = net.get_image(&c.url) {
+            let mut seen = HashSet::new();
+            for c in net.candidates(&g, 12) {
+                // Different sources often serve the very same picture.
+                if let Some(b) = net.get_image(&c.url).filter(|b| seen.insert(hash(b))) {
                     out.push((c.label, b));
                     // Stream partial results so the picker fills in as they arrive.
                     let _ = tx.send(Msg::Candidates(req, out.clone()));
@@ -190,6 +196,7 @@ struct Net {
     agent: ureq::Agent,
     theme: PathBuf,
     lists: std::sync::Mutex<std::collections::HashMap<&'static str, Vec<String>>>,
+    switch: std::sync::Mutex<Option<std::sync::Arc<Vec<SwTitle>>>>,
 }
 
 fn repo(s: System) -> &'static str {
@@ -203,7 +210,7 @@ impl Net {
             .user_agent(concat!("nxe-launcher/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
-        Self { agent, theme, lists: Default::default() }
+        Self { agent, theme, lists: Default::default(), switch: Default::default() }
     }
 
     fn get(&self, url: &str) -> Option<Vec<u8>> {
@@ -212,6 +219,9 @@ impl Net {
     }
 
     fn get_image(&self, url: &str) -> Option<Vec<u8>> {
+        if let Some(p) = url.strip_prefix("exe-icon:") {
+            return exe_icon(Path::new(p)).filter(|b| image::load_from_memory(b).map(|i| i.width() >= 64).unwrap_or(false));
+        }
         let b = self.get(url)?;
         image::load_from_memory(&b).ok()?;
         Some(b)
@@ -272,70 +282,375 @@ impl Net {
 
     fn candidates(&self, g: &GameRef, max_fuzzy: usize) -> Vec<Cand> {
         let mut out = Vec::new();
+        let lr = |r: &str, name: &str| format!("https://raw.githubusercontent.com/libretro-thumbnails/{r}/master/Named_Boxarts/{}.png", pct(name));
         match g.system {
             System::Switch => {
-                if let Some(id) = g.id.as_ref().filter(|i| i.len() == 16 && i.chars().all(|c| c.is_ascii_hexdigit())) {
-                    // Updates/DLC share the base game's art: base ID ends in 000.
-                    let base = format!("{}000", &id[..13]);
-                    out.push(Cand { label: "Game icon".into(), url: format!("https://api.nlib.cc/nx/{base}/icon"), auto_ok: true });
-                    out.push(Cand { label: "Banner".into(), url: format!("https://api.nlib.cc/nx/{base}/banner"), auto_ok: false });
+                let valid = g.id.as_ref().filter(|i| i.len() == 16 && i.chars().all(|c| c.is_ascii_hexdigit()));
+                let base = valid.map(|id| format!("{}000", id[..13].to_uppercase()));
+                let idx = self.switch_index();
+                // By title ID first (exact), then by name.
+                let mut hits: Vec<(&SwTitle, bool)> = vec![];
+                if let Some(b) = &base {
+                    if let Some(t) = idx.iter().find(|t| &t.id == b) {
+                        hits.push((t, true));
+                    }
+                }
+                let names: Vec<String> = idx.iter().map(|t| t.name.clone()).collect();
+                // With an exact ID hit, look for related titles by the real name, not the file name.
+                let (qn, qs) = match hits.first() {
+                    Some((t, _)) => (t.name.clone(), t.name.clone()),
+                    None => (g.name.clone(), g.stem.clone()),
+                };
+                for (n, score) in best_matches(&qn, &qs, &names, max_fuzzy.min(4)) {
+                    if let Some(t) = idx.iter().find(|t| t.name == n && !t.id.is_empty()) {
+                        if !hits.iter().any(|(h, _)| h.id == t.id) {
+                            hits.push((t, score >= 0.75 && base.is_none()));
+                        }
+                    }
+                }
+                if let Some(b) = &base {
+                    out.push(Cand { label: format!("nlib\tGame icon · {b}"), url: format!("https://api.nlib.cc/nx/{b}/icon"), auto_ok: true });
+                }
+                for (i, (t, sure)) in hits.iter().enumerate() {
+                    if !t.icon.is_empty() {
+                        out.push(Cand { label: format!("eShop icon\t{}", t.name), url: t.icon.clone(), auto_ok: *sure });
+                    }
+                    if !t.banner.is_empty() {
+                        out.push(Cand { label: format!("eShop banner\t{}", t.name), url: t.banner.clone(), auto_ok: false });
+                    }
+                    if i == 0 {
+                        for (k, sc) in t.shots.iter().take(3).enumerate() {
+                            out.push(Cand { label: format!("eShop screenshot {}\t{}", k + 1, t.name), url: sc.clone(), auto_ok: false });
+                        }
+                    }
+                }
+                if let Some(b) = &base {
+                    out.push(Cand { label: format!("nlib\tBanner · {b}"), url: format!("https://api.nlib.cc/nx/{b}/banner"), auto_ok: false });
                 }
             }
             System::Ps2 => {
                 if let Some(serial) = g.id.as_ref().filter(|i| is_ps2_serial(i)) {
                     out.push(Cand {
-                        label: format!("Cover · {serial}"),
+                        label: format!("PS2 covers\t{serial}"),
                         url: format!("https://raw.githubusercontent.com/xlenore/ps2-covers/main/covers/default/{serial}.jpg"),
                         auto_ok: true,
                     });
                 }
             }
+            System::Gc => {
+                if let Some(id) = g.id.as_ref().filter(|i| i.len() == 6) {
+                    // GameTDB box art by disc ID, region from the 4th character.
+                    let regions: &[&str] = match id.as_bytes()[3] {
+                        b'E' | b'N' => &["US"],
+                        b'J' => &["JA"],
+                        b'P' | b'D' | b'F' | b'S' | b'I' | b'X' | b'Y' => &["EN", "FR", "DE", "ES", "IT"],
+                        _ => &["US", "EN", "JA"],
+                    };
+                    for r in regions.iter().take(2) {
+                        out.push(Cand { label: format!("GameTDB\t{id} ({r})"), url: format!("https://art.gametdb.com/wii/cover/{r}/{id}.png"), auto_ok: true });
+                    }
+                }
+            }
+            System::Pc => {
+                // A recompilation's own art (its app icon / logo) comes first.
+                if let Some((repo, paths)) = port_art(g) {
+                    for p in paths {
+                        out.push(Cand { label: format!("Project art\t{repo}"), url: format!("https://raw.githubusercontent.com/{repo}/HEAD/{p}"), auto_ok: true });
+                    }
+                }
+                if g.path.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
+                    out.push(Cand { label: "From the program\tApp icon".into(), url: format!("exe-icon:{}", g.path.display()), auto_ok: false });
+                }
+                // A PC port also gets the box art of the game it's a port of.
+                let key = squash(&format!("{} {}", g.name, g.stem));
+                let port = PC_PORTS.iter().find(|(keys, _, _)| keys.split('|').any(|k| key.contains(k)));
+                if let Some((_, r, title)) = port {
+                    let names = self.libretro_names_in(r);
+                    for (name, score) in best_matches(title, title, &names, max_fuzzy.max(3)) {
+                        out.push(Cand { label: format!("Original box art\t{name}"), url: lr(r, &name), auto_ok: score >= 0.6 });
+                    }
+                }
+                // Steam store art by name (portrait library cover, header, hero).
+                for (i, (appid, name, score)) in self.steam_search(&g.name).into_iter().enumerate() {
+                    let sure = port.is_none() && i == 0 && score >= 0.75;
+                    let base = format!("https://cdn.akamai.steamstatic.com/steam/apps/{appid}");
+                    out.push(Cand { label: format!("Steam\t{name}"), url: format!("{base}/library_600x900_2x.jpg"), auto_ok: sure });
+                    if i < 2 {
+                        out.push(Cand { label: format!("Steam header\t{name}"), url: format!("{base}/header.jpg"), auto_ok: false });
+                    }
+                    if i == 0 {
+                        out.push(Cand { label: format!("Steam artwork\t{name}"), url: format!("{base}/library_hero.jpg"), auto_ok: false });
+                    }
+                }
+            }
             _ => {}
         }
-        if g.system == System::Gc {
-            if let Some(id) = g.id.as_ref().filter(|i| i.len() == 6) {
-                // GameTDB box art by disc ID, region from the 4th character.
-                let regions: &[&str] = match id.as_bytes()[3] {
-                    b'E' | b'N' => &["US"],
-                    b'J' => &["JA"],
-                    b'P' | b'D' | b'F' | b'S' | b'I' | b'X' | b'Y' => &["EN", "FR", "DE", "ES", "IT"],
-                    _ => &["US", "EN", "JA"],
-                };
-                for r in regions.iter().take(2) {
-                    out.push(Cand { label: format!("Cover · {id}"), url: format!("https://art.gametdb.com/wii/cover/{r}/{id}.png"), auto_ok: true });
-                }
-            }
-        }
-        if g.system == System::Pc {
-            // A PC port uses the box art of the game it's a port of.
-            let key = squash(&format!("{} {}", g.name, g.stem));
-            if let Some((_, r, title)) = PC_PORTS.iter().find(|(keys, _, _)| keys.split('|').any(|k| key.contains(k))) {
-                let names = self.libretro_names_in(r);
-                for (name, score) in best_matches(title, title, &names, max_fuzzy.max(3)) {
-                    out.push(Cand {
-                        label: name.clone(),
-                        url: format!("https://raw.githubusercontent.com/libretro-thumbnails/{r}/master/Named_Boxarts/{}.png", pct(&name)),
-                        auto_ok: score >= 0.6,
-                    });
-                }
-            }
-        }
-        if g.system.cover_repo().is_some() {
+        if let Some(r) = g.system.cover_repo() {
             let names = self.libretro_names(g.system);
-            for (name, score) in best_matches(&g.name, &g.stem, &names, max_fuzzy) {
-                out.push(Cand {
-                    label: name.clone(),
-                    url: format!(
-                        "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
-                        repo(g.system),
-                        pct(&name)
-                    ),
-                    auto_ok: score >= 0.6,
-                });
+            for (k, (name, score)) in best_matches(&g.name, &g.stem, &names, max_fuzzy).into_iter().enumerate() {
+                out.push(Cand { label: format!("libretro\t{name}"), url: lr(r, &name), auto_ok: score >= 0.6 });
+                if k == 0 && max_fuzzy > 4 {
+                    for (kind, what) in [("Named_Titles", "Title screen"), ("Named_Snaps", "Screenshot")] {
+                        out.push(Cand {
+                            label: format!("libretro {what}\t{name}"),
+                            url: format!("https://raw.githubusercontent.com/libretro-thumbnails/{r}/master/{kind}/{}.png", pct(&name)),
+                            auto_ok: false,
+                        });
+                    }
+                }
             }
         }
+        // Auto-pick in the order above, but never the same URL twice.
+        let mut seen = HashSet::new();
+        out.retain(|c| seen.insert(c.url.clone()));
         out
     }
+
+    /// Switch titles from blawar/titledb (the list Switch homebrew tools use). The 90 MB
+    /// list is downloaded once and boiled down to a small index; refreshed monthly.
+    fn switch_index(&self) -> std::sync::Arc<Vec<SwTitle>> {
+        let mut slot = self.switch.lock().unwrap();
+        if let Some(v) = slot.as_ref() {
+            return v.clone();
+        }
+        let dir = self.theme.join("cache");
+        let idx = dir.join("switch-titles.tsv");
+        let fresh = std::fs::metadata(&idx)
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(30 * 86400))
+            .unwrap_or(false);
+        if !fresh {
+            if let Some(rows) = self.fetch_titledb(&dir) {
+                let _ = std::fs::write(&idx, rows);
+            }
+        }
+        let v: Vec<SwTitle> = std::fs::read_to_string(&idx)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split('\t');
+                Some(SwTitle {
+                    id: f.next()?.into(),
+                    name: f.next()?.into(),
+                    icon: f.next()?.into(),
+                    banner: f.next()?.into(),
+                    shots: f.next().unwrap_or("").split('|').filter(|s| !s.is_empty()).map(String::from).collect(),
+                })
+            })
+            .collect();
+        let v = std::sync::Arc::new(v);
+        *slot = Some(v.clone());
+        v
+    }
+
+    fn fetch_titledb(&self, dir: &Path) -> Option<String> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct E {
+            id: Option<String>,
+            name: Option<String>,
+            icon_url: Option<String>,
+            banner_url: Option<String>,
+            screenshots: Option<Vec<String>>,
+        }
+        std::fs::create_dir_all(dir).ok()?;
+        let tmp = dir.join("titledb.json.part");
+        {
+            let mut r = self.agent.get("https://raw.githubusercontent.com/blawar/titledb/master/US.en.json").call().ok()?;
+            if r.status() != 200 {
+                return None;
+            }
+            let mut f = std::fs::File::create(&tmp).ok()?;
+            std::io::copy(&mut r.body_mut().as_reader(), &mut f).ok()?;
+        }
+        let f = std::io::BufReader::new(std::fs::File::open(&tmp).ok()?);
+        let all: Option<std::collections::HashMap<String, E>> = serde_json::from_reader(f).ok();
+        let _ = std::fs::remove_file(&tmp);
+        let all = all?;
+        let clean = |s: &str| -> String { s.replace(['\t', '\n', '\r', '|'], " ").replace(['™', '®'], "") };
+        let mut rows: Vec<String> = all
+            .into_values()
+            .filter_map(|e| {
+                let id = e.id?.to_uppercase();
+                let name = clean(&e.name?);
+                if id.len() != 16 || !id.ends_with("000") {
+                    return None;
+                }
+                let shots: Vec<String> = e.screenshots.unwrap_or_default().into_iter().take(3).map(|s: String| clean(&s)).collect();
+                Some(format!("{id}\t{}\t{}\t{}\t{}", name.trim(), clean(&e.icon_url.unwrap_or_default()), clean(&e.banner_url.unwrap_or_default()), shots.join("|")))
+            })
+            .collect();
+        rows.sort();
+        rows.dedup();
+        Some(rows.join("\n"))
+    }
+
+    /// Steam store search by name: (app id, name, match score), best first.
+    fn steam_search(&self, name: &str) -> Vec<(u64, String, f32)> {
+        let q = crate::library::clean_name(name);
+        let url = format!("https://store.steampowered.com/api/storesearch/?term={}&cc=us&l=en", pct(&q));
+        let Some(b) = self.get(&url) else { return vec![] };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) else { return vec![] };
+        let qt = norm_tokens(&q);
+        let mut out: Vec<(u64, String, f32)> = v["items"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|i| Some((i["id"].as_u64()?, i["name"].as_str()?.to_string())))
+                    .map(|(id, n)| {
+                        let s = dice(&qt, &norm_tokens(&n));
+                        (id, n, s)
+                    })
+                    .filter(|(_, _, s)| *s > 0.3)
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+        out.truncate(3);
+        out
+    }
+}
+
+pub struct SwTitle {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub banner: String,
+    pub shots: Vec<String>,
+}
+
+/// Art that ships inside a port's own repository (checked by hand).
+const PORT_ART: &[(&str, &[&str])] = &[
+    ("Zelda64Recomp/Zelda64Recomp", &["icons/512.png"]),
+    ("HarbourMasters/Shipwright", &["soh/macosx/sohIcon.png", "soh/icon.jpg"]),
+    ("HarbourMasters/2ship2harkinian", &["mm/linux/2s2hIcon.png"]),
+    ("HarbourMasters/SpaghettiKart", &["icon.png"]),
+    ("HarbourMasters/Starship", &["logo.png"]),
+    ("BanjoRecomp/BanjoRecomp", &["icons/app.png"]),
+];
+
+/// The Get Ports entry a PC game belongs to (installed by us, or by folder/exe name).
+fn port_art(g: &GameRef) -> Option<(&'static str, &'static [&'static str])> {
+    let key = squash(&format!("{} {}", g.path.display(), g.name));
+    let p = crate::net::PORTS.iter().find(|p| g.path.starts_with(crate::net::ports_dir().join(p.folder)) || key.contains(&squash(p.folder)))?;
+    PORT_ART.iter().find(|(r, _)| *r == p.repo).copied()
+}
+
+/// The biggest icon embedded in a Windows .exe, as PNG bytes.
+pub fn exe_icon(path: &Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut at = |off: u64, len: usize| -> Option<Vec<u8>> {
+        if len > 16 << 20 {
+            return None;
+        }
+        f.seek(SeekFrom::Start(off)).ok()?;
+        let mut b = vec![0; len];
+        f.read_exact(&mut b).ok()?;
+        Some(b)
+    };
+    let u16_ = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
+    let u32_ = |b: &[u8], o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    let dos = at(0, 64)?;
+    if &dos[..2] != b"MZ" {
+        return None;
+    }
+    let pe = u32_(&dos, 0x3c) as u64;
+    let hdr = at(pe, 24)?;
+    if &hdr[..4] != b"PE\0\0" {
+        return None;
+    }
+    let nsec = u16_(&hdr, 6) as usize;
+    let optsz = u16_(&hdr, 20) as usize;
+    let opt = at(pe + 24, optsz)?;
+    let dd = match u16_(&opt, 0) {
+        0x10b => 96,
+        0x20b => 112,
+        _ => return None,
+    };
+    if opt.len() < dd + 24 {
+        return None;
+    }
+    let rsrc_rva = u32_(&opt, dd + 16);
+    if rsrc_rva == 0 {
+        return None;
+    }
+    let secs = at(pe + 24 + optsz as u64, nsec * 40)?;
+    let to_off = |rva: u32| -> Option<u64> {
+        (0..nsec).find_map(|i| {
+            let s = &secs[i * 40..];
+            let (va, vs, raw) = (u32_(s, 12), u32_(s, 8).max(u32_(s, 16)), u32_(s, 20));
+            (rva >= va && rva < va + vs).then(|| (raw + rva - va) as u64)
+        })
+    };
+    let base = to_off(rsrc_rva)?;
+    // Whole resource section is small; read up to 32 MB of it.
+    let sec = (0..nsec).map(|i| &secs[i * 40..]).find(|s| rsrc_rva >= u32_(s, 12) && rsrc_rva < u32_(s, 12) + u32_(s, 8).max(u32_(s, 16)))?;
+    let len = (u32_(sec, 16).max(u32_(sec, 8)) - (rsrc_rva - u32_(sec, 12))).min(32 << 20) as usize;
+
+    let mut f2 = std::fs::File::open(path).ok()?;
+    f2.seek(SeekFrom::Start(base)).ok()?;
+    let mut rs = vec![0; len];
+    let n = f2.read(&mut rs).ok()?;
+    rs.truncate(n);
+    // Directory entries: (id or name, offset, is_dir).
+    let entries = |o: usize| -> Vec<(u32, usize, bool)> {
+        if o + 16 > rs.len() {
+            return vec![];
+        }
+        let n = u16_(&rs, o + 12) as usize + u16_(&rs, o + 14) as usize;
+        (0..n)
+            .filter_map(|i| {
+                let e = o + 16 + i * 8;
+                (e + 8 <= rs.len()).then(|| {
+                    let d = u32_(&rs, e + 4);
+                    (u32_(&rs, e), (d & 0x7fff_ffff) as usize, d & 0x8000_0000 != 0)
+                })
+            })
+            .collect()
+    };
+    // Follow type -> name -> first language down to the data.
+    let leaf = |ty: u32, id: Option<u32>| -> Option<Vec<u8>> {
+        let (_, o, _) = entries(0).into_iter().find(|e| e.0 == ty && e.2)?;
+        let (_, o, _) = entries(o).into_iter().find(|e| e.2 && id.map(|i| e.0 == i).unwrap_or(true))?;
+        let (_, o, dir) = entries(o).into_iter().next()?;
+        if dir || o + 8 > rs.len() {
+            return None;
+        }
+        let (rva, size) = (u32_(&rs, o), u32_(&rs, o + 4) as usize);
+        let start = (rva - rsrc_rva) as usize;
+        rs.get(start..start + size).map(|s| s.to_vec())
+    };
+    let group = leaf(14, None)?;
+    let count = u16_(&group, 4) as usize;
+    let best = (0..count)
+        .filter_map(|i| group.get(6 + i * 14..6 + i * 14 + 14))
+        .max_by_key(|e| {
+            let w = if e[0] == 0 { 256 } else { e[0] as u32 };
+            (w, u16_(e, 6))
+        })?
+        .to_vec();
+    let data = leaf(3, Some(u16_(&best, 12) as u32))?;
+    if data.starts_with(b"\x89PNG") {
+        return Some(data);
+    }
+    // Plain bitmap icon: wrap it in an .ico so the image crate can read it.
+    let mut ico = vec![0, 0, 1, 0, 1, 0];
+    ico.extend_from_slice(&best[..8]);
+    ico.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes());
+    ico.extend_from_slice(&data);
+    let img = image::load_from_memory_with_format(&ico, image::ImageFormat::Ico).ok()?;
+    let mut png = std::io::Cursor::new(vec![]);
+    img.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some(png.into_inner())
+}
+
+fn hash(b: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
 }
 
 fn squash(s: &str) -> String {
@@ -571,5 +886,42 @@ mod pic_tests {
         let md = "![Discord Invitation](https://discordapp.com/api/guilds/1/widget.png?style=banner2 'N64')\n![Gyro](docs/deck_gyro_1.jpg)\n<img alt=\"x\" src=\"./docs/poweredbylus.lightmode.png\">\n<img src=\"https://github.com/user-attachments/assets/abc\" width=600>";
         let v = super::readme_images("Zelda64Recomp/Zelda64Recomp", md);
         assert_eq!(v, vec!["https://raw.githubusercontent.com/Zelda64Recomp/Zelda64Recomp/HEAD/docs/deck_gyro_1.jpg".to_string(), "https://github.com/user-attachments/assets/abc".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+    fn g(system: System, name: &str, id: Option<&str>, path: &str) -> GameRef {
+        GameRef { system, name: name.into(), stem: name.into(), id: id.map(String::from), path: path.into(), embedded: None }
+    }
+    #[test]
+    #[ignore]
+    fn sources_online() {
+        let net = Net::new(std::env::temp_dir().join("nxe_theme_test"));
+        for gr in [
+            g(System::Switch, "Super Mario Odyssey", None, "x.nsp"),
+            g(System::Switch, "whatever", Some("0100000000010000"), "x.nsp"),
+            g(System::Pc, "Hollow Knight", None, "C:/Games/Hollow Knight/hollow_knight.exe"),
+            g(System::Pc, "Zelda64Recompiled", None, "C:/ports/Zelda64Recomp/Zelda64Recompiled.exe"),
+            g(System::N64, "Super Mario 64", None, "sm64.z64"),
+        ] {
+            let c = net.candidates(&gr, 12);
+            println!("== {}", gr.name);
+            for c in &c {
+                let ok = net.get_image(&c.url).is_some();
+                println!("  {} {} {} {}", if ok { "OK " } else { "-- " }, c.auto_ok, c.label.replace('\t', " | "), c.url);
+            }
+        }
+    }
+    #[test]
+    fn exe_icon_reads() {
+        let p = std::path::Path::new("target/x86_64-pc-windows-gnu/release/nxe-launcher.exe");
+        if p.exists() {
+            let b = exe_icon(p).expect("icon");
+            let i = image::load_from_memory(&b).unwrap();
+            println!("icon {}x{}", i.width(), i.height());
+            assert!(i.width() >= 64);
+        }
     }
 }

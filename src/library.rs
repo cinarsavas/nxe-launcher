@@ -83,6 +83,7 @@ pub fn scan(system: System, dirs: &[PathBuf], cover_dirs: &CoverDirs) -> Vec<Gam
             g.id = match system {
                 System::Ps2 | System::Ps1 => ps_serial(&g.path),
                 System::Psp => psp_disc_id(&g.path),
+                System::Switch => nsp_title_id(&g.path),
                 _ => None,
             };
         }
@@ -533,6 +534,73 @@ fn psp_disc_id(p: &Path) -> Option<String> {
     let mut iso = Iso::open(p)?;
     let sfo = iso.file(&["PSP_GAME", "PARAM.SFO"], 64 * 1024)?;
     parse_sfo(&sfo).into_iter().find(|(k, _)| k == "DISC_ID").map(|(_, v)| v.trim_end_matches('\0').to_string()).filter(|v| !v.is_empty())
+}
+
+/// Title ID from an NSP / NSZ: its PFS0 file list names the ticket after the rights ID,
+/// which starts with the title ID ("0100…000" + key generation). XCI files keep their file
+/// list in an encrypted area, so they need the [TitleID] in the file name.
+pub fn nsp_title_id(p: &Path) -> Option<String> {
+    let ext = p.extension()?.to_string_lossy().to_lowercase();
+    if ext != "nsp" && ext != "nsz" {
+        return None;
+    }
+    let mut f = File::open(p).ok()?;
+    let mut h = [0u8; 16];
+    f.read_exact(&mut h).ok()?;
+    if &h[0..4] != b"PFS0" {
+        return None;
+    }
+    let n = u32::from_le_bytes(h[4..8].try_into().ok()?) as usize;
+    let st = u32::from_le_bytes(h[8..12].try_into().ok()?) as usize;
+    if n == 0 || n > 4096 || st > 1 << 20 {
+        return None;
+    }
+    let mut rest = vec![0u8; n * 24 + st];
+    f.read_exact(&mut rest).ok()?;
+    let strings = &rest[n * 24..];
+    let mut ids: Vec<String> = vec![];
+    for i in 0..n {
+        let off = u32::from_le_bytes(rest[i * 24 + 16..i * 24 + 20].try_into().ok()?) as usize;
+        let name: String = strings.get(off..)?.iter().take_while(|b| **b != 0).map(|b| *b as char).collect();
+        let lower = name.to_lowercase();
+        // <32 hex rights ID>.tik / .cert
+        if let Some(stem) = lower.strip_suffix(".tik") {
+            if stem.len() == 32 && stem.chars().all(|c| c.is_ascii_hexdigit()) {
+                ids.push(stem[..16].to_uppercase());
+            }
+        }
+    }
+    // Prefer the base game (…000) if the package holds several.
+    ids.sort_by_key(|i| !i.ends_with("000"));
+    ids.into_iter().next()
+}
+
+#[cfg(test)]
+mod nsp_tests {
+    #[test]
+    fn reads_ticket_name() {
+        let names = ["0100abc0012340000000000000000000.tik", "0100abc0012340000000000000000000.cert", "abcdef.nca"];
+        let mut st = vec![];
+        let mut offs = vec![];
+        for n in names {
+            offs.push(st.len() as u32);
+            st.extend_from_slice(n.as_bytes());
+            st.push(0);
+        }
+        let mut b = b"PFS0".to_vec();
+        b.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        b.extend_from_slice(&(st.len() as u32).to_le_bytes());
+        b.extend_from_slice(&[0; 4]);
+        for o in &offs {
+            b.extend_from_slice(&[0; 16]);
+            b.extend_from_slice(&o.to_le_bytes());
+            b.extend_from_slice(&[0; 4]);
+        }
+        b.extend_from_slice(&st);
+        let p = std::env::temp_dir().join("nxe_t.nsp");
+        std::fs::write(&p, b).unwrap();
+        assert_eq!(super::nsp_title_id(&p).as_deref(), Some("0100ABC001234000"));
+    }
 }
 
 #[cfg(test)]

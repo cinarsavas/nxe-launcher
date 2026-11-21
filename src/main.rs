@@ -1068,7 +1068,7 @@ impl App {
             return;
         }
         if self.picker.is_some() {
-            self.picker_input(p);
+            self.picker_input(p, frame);
             return;
         }
         if self.ach.is_some() {
@@ -1268,7 +1268,7 @@ impl eframe::App for App {
         self.ra_prefetch();
 
         // Input: gamepad thread + keyboard. While typing in a text box only Enter/Esc count.
-        let editing = self.menu.as_ref().map(|m| m.edit.is_some()).unwrap_or(false);
+        let editing = self.menu.as_ref().map(|m| m.edit.is_some()).unwrap_or(false) || self.picker_typing();
         self.frames += 1;
         if self.frames == 3 && self.fullscreen {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));

@@ -1,6 +1,6 @@
 [package]
 name = "nxe-launcher"
-version = "0.12.0"
+version = "0.13.0"
 license = "MIT"
 repository = "https://github.com/cinarsavas/nxe-launcher"
 edition = "2021"
@@ -10,7 +10,7 @@ description = "Fullscreen 2008-style console dashboard that launches games on yo
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 gilrs = "0.11"
 rfd = "0.18"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "bmp", "gif", "webp"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 chrono = "0.4"

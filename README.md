@@ -222,7 +222,8 @@ Sign in once in Settings → Achievements with your normal username and password
 <summary><b>Gamerpics, cover art, themes and music</b></summary>
 
 - **Gamerpics:** built-ins, `theme\gamerpics` (starts empty, put your pictures there), any folder you add with **Add a Folder**, your own picture with a move-and-zoom crop, or your RetroAchievements picture.
-- **Cover art** downloads automatically: PS2 by disc serial, GameCube by disc ID, Switch by title ID, the rest by name from libretro-thumbnails. Wrong cover? Y → Change Cover. Your picks go in `theme\covers\<console>\`.
+- **Cover art** downloads automatically: PS2 by disc serial, GameCube by disc ID, Switch by title ID (read from inside .nsp/.nsz files, or `[TitleID]` in the file name) or by name from the eShop list, PC games from Steam by name, recompiled ports from their own project art, everything else by name from libretro-thumbnails. Wrong cover? Y → Change Cover shows every option found (labelled by source), lets you search a different name, or use any picture file. Your picks go in `theme\covers\<console>\`.
+- **Cover style:** Settings → Display → Cover Art on Tiles: *Fill Tile* (crops the art to the whole tile) or *Whole Cover*.
 - **Themes:** Green, Blue, Orange, Purple, Black (Settings → Display), with a colour fade between them. `theme\background.png` and `theme\font.ttf` replace the background and font.
 - **Music:** MP3, OGG, FLAC or WAV in `theme\music` play shuffled on the dashboard and fade out when a game starts.
 - **Sounds:** `theme\sounds\move.wav`, `select.wav`, `back.wav`, `channel.wav`, `launch.wav`.

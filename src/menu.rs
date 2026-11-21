@@ -6,7 +6,7 @@
 use crate::config::config_path;
 use crate::covers;
 use crate::input::Pad;
-use crate::scene::{self, fit, hint_bar, text_shadow, BTN_A, BTN_B};
+use crate::scene::{self, fit, hint_bar, text_shadow, BTN_A, BTN_B, BTN_X, BTN_Y};
 use crate::config::Launcher;
 use crate::systems::{self, System};
 use crate::{theme_dir, App, Icon};
@@ -82,6 +82,7 @@ pub enum RowId {
     CustomPic,
     FrameRate,
     ShowVersion,
+    CoverStyle,
     RaUsePic,
     ButtonIcons,
     SwitchLayout,
@@ -301,6 +302,12 @@ pub fn rows(app: &App, m: &Menu) -> Vec<Row> {
                 ));
                 v.push(Row::new(RowId::Fullscreen, "Fullscreen", onoff(cfg.fullscreen), "Run the dashboard fullscreen. F11 also switches it."));
                 v.push(Row::new(RowId::Sounds, "Menu Sounds", onoff(cfg.sounds), "Plays theme\\sounds\\*.wav when you move around."));
+                v.push(Row::new(
+                    RowId::CoverStyle,
+                    "Cover Art on Tiles",
+                    Value::Text(if cfg.cover_style == "whole" { "Whole Cover".into() } else { "Fill Tile".into() }),
+                    "Fill Tile crops the art so it covers the whole tile. Whole Cover shows the full picture with the tile colour around it. Small icons are always shown whole.",
+                ));
                 v.push(Row::new(RowId::ShowVersion, "Show Version Number", onoff(cfg.show_version), "Shows the launcher version in the bottom-right corner."));
                 let n_songs = crate::music::songs().len();
                 v.push(Row::new(
@@ -893,6 +900,10 @@ impl App {
                 self.cfg.gamerpic = "ra".into();
                 self.cfg.save();
                 self.toast("Gamerpic: your RetroAchievements picture");
+            }
+            RowId::CoverStyle => {
+                self.cfg.cover_style = if self.cfg.cover_style == "whole" { "fill".into() } else { "whole".into() };
+                self.cfg.save();
             }
             RowId::ShowVersion => {
                 self.cfg.show_version = !self.cfg.show_version;
@@ -1512,30 +1523,62 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
 pub struct Picker {
     pub game: usize,
     pub req: u64,
-    /// (label, texture, bytes). Index 0 is "Automatic".
+    /// (label "source\ttitle", texture, bytes). Index 0 is "Automatic".
     pub items: Vec<(String, Option<egui::TextureHandle>, Vec<u8>)>,
     pub sel: usize,
     pub done: bool,
     pub opened: Instant,
     pub scroll: f32,
+    /// Typing a different name to search for.
+    pub search: Option<PickerSearch>,
+    /// The name the results are for, when it's not the game's own.
+    pub query: Option<String>,
+    pub typed_at: Option<Instant>,
 }
+
+pub struct PickerSearch {
+    pub text: String,
+    pub focus_set: bool,
+}
+
+pub const PICKER_COLS: usize = 4;
 
 impl App {
     pub fn open_picker(&mut self, gi: usize) {
+        self.picker = None;
+        self.picker_search(gi, None);
+        self.sounds.play("select");
+    }
+
+    /// Start (or restart) the candidate search, optionally for a different name.
+    pub fn picker_search(&mut self, gi: usize, query: Option<String>) {
         self.picker_req += 1;
         let req = self.picker_req;
-        let g = self.games[gi].as_ref();
+        let mut g = self.games[gi].as_ref();
+        if let Some(q) = &query {
+            g.name = q.clone();
+            g.stem = q.clone();
+            g.id = None;
+            g.embedded = None;
+        }
         let _ = self.cover_pri_tx.send(covers::Job::Candidates(req, g));
+        let opened = self.picker.as_ref().map(|p| p.opened).unwrap_or_else(Instant::now);
         self.picker = Some(Picker {
             game: gi,
             req,
             items: vec![("Automatic".into(), None, vec![])],
             sel: 0,
             done: false,
-            opened: Instant::now(),
+            opened,
             scroll: 0.0,
+            search: None,
+            query,
+            typed_at: Some(Instant::now()),
         });
-        self.sounds.play("select");
+    }
+
+    pub fn picker_typing(&self) -> bool {
+        self.picker.as_ref().map(|p| p.search.is_some()).unwrap_or(false)
     }
 
     pub fn picker_candidates(&mut self, ctx: &egui::Context, req: u64, list: Vec<(String, Vec<u8>)>) {
@@ -1553,21 +1596,46 @@ impl App {
         }
     }
 
-    pub fn picker_input(&mut self, p: Pad) {
+    pub fn picker_input(&mut self, p: Pad, frame: &eframe::Frame) {
         let Some(pk) = self.picker.as_mut() else { return };
+        // The text box handles Enter / Esc itself (see draw_picker); a key press that
+        // also arrives as a button right after must not pick a cover.
+        if pk.search.is_some() || pk.typed_at.map(|t| t.elapsed().as_millis() < 300).unwrap_or(false) {
+            return;
+        }
+        let n = pk.items.len();
+        let c = PICKER_COLS;
+        let cur = pk.sel;
+        let to = match p {
+            Pad::Left if cur % c > 0 => Some(cur - 1),
+            Pad::Right if cur % c + 1 < c => Some(cur + 1),
+            Pad::Up => cur.checked_sub(c),
+            // Moving down onto a short last row lands on its last item.
+            Pad::Down if cur / c < (n - 1) / c => Some((cur + c).min(n - 1)),
+            _ => None,
+        };
+        let moved = match to {
+            Some(t) if t < n && t != cur => {
+                pk.sel = t;
+                true
+            }
+            _ => false,
+        };
+        if moved {
+            self.sounds.play("move");
+            return;
+        }
         match p {
-            Pad::Left if pk.sel > 0 => {
-                pk.sel -= 1;
-                self.sounds.play("move");
-            }
-            Pad::Right if pk.sel + 1 < pk.items.len() => {
-                pk.sel += 1;
-                self.sounds.play("move");
-            }
-            Pad::B | Pad::Y => {
+            Pad::B => {
                 self.picker = None;
                 self.sounds.play("back");
             }
+            Pad::X => {
+                let start = pk.query.clone().unwrap_or_else(|| self.games[pk.game].name.clone());
+                pk.search = Some(PickerSearch { text: start, focus_set: false });
+                self.sounds.play("select");
+            }
+            Pad::Y => self.picker_from_file(frame),
             Pad::A => {
                 let gi = pk.game;
                 let g = self.games[gi].as_ref();
@@ -1586,9 +1654,41 @@ impl App {
             _ => {}
         }
     }
+
+    /// "Choose a file": any picture from disk becomes this game's cover.
+    fn picker_from_file(&mut self, frame: &eframe::Frame) {
+        let Some(gi) = self.picker.as_ref().map(|p| p.game) else { return };
+        let test = std::env::var("NXE_TEST_PIC").ok().map(std::path::PathBuf::from);
+        let Some(path) = test.or_else(|| {
+            rfd::FileDialog::new()
+                .set_title("Choose a cover picture")
+                .add_filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp", "ico"])
+                .set_parent(frame)
+                .pick_file()
+        }) else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(&path) else { return };
+        // PNG and JPG are kept as they are; anything else becomes a PNG.
+        let bytes = match image::guess_format(&bytes) {
+            Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg) => Some(bytes),
+            _ => image::load_from_memory(&bytes).ok().and_then(|img| {
+                let mut out = std::io::Cursor::new(vec![]);
+                img.write_to(&mut out, image::ImageFormat::Png).ok().map(|_| out.into_inner())
+            }),
+        };
+        let Some(bytes) = bytes else {
+            self.toast("That file isn't a picture the launcher can read");
+            return;
+        };
+        let g = self.games[gi].as_ref();
+        covers::save_image(&covers::manual_dir(&theme_dir(), g.system), &g.key(), &bytes);
+        self.picker = None;
+        self.refresh_cover(gi);
+        self.sounds.play("select");
+        self.toast("Cover updated");
+    }
 }
-
-
 
 pub fn draw_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let Some(pk) = app.picker.as_ref() else { return };
@@ -1596,64 +1696,143 @@ pub fn draw_picker(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let p = ui.painter_at(screen);
     let a = (pk.opened.elapsed().as_secs_f32() / 0.22).min(1.0);
     let name = app.games.get(pk.game).map(|g| g.name.clone()).unwrap_or_default();
-    let f = frame360(&p, app, screen, "Choose a Cover", Some(&name), a, true);
+    let sub = match &pk.query {
+        Some(q) => format!("{name}  ·  results for \u{201c}{q}\u{201d}"),
+        None => name,
+    };
+    let f = frame360(&p, app, screen, "Choose a Cover", Some(&sub), a, true);
     let u = f.u;
     let pk = app.picker.as_mut().unwrap();
-    let inner = f.panel.shrink2(vec2(24.0 * u, 20.0 * u));
-    let card_h = 330.0 * u;
-    let gap = 26.0 * u;
-    let widths: Vec<f32> = pk
-        .items
-        .iter()
-        .map(|(_, t, _)| match t {
-            Some(t) => {
-                let [tw, th] = t.size();
-                (card_h * tw as f32 / th.max(1) as f32).clamp(card_h * 0.55, card_h * 1.8)
-            }
-            None => card_h * 0.7,
-        })
-        .collect();
-    let sel_x: f32 = widths.iter().take(pk.sel).map(|w| w + gap).sum::<f32>() + widths[pk.sel] * 0.5;
-    let target = (sel_x - inner.width() * 0.5).max(0.0);
+    let inner = f.panel.shrink2(vec2(22.0 * u, 18.0 * u));
+    let grid = Rect::from_min_max(inner.min, pos2(inner.right(), inner.bottom() - 30.0 * u));
+    let c = PICKER_COLS;
+    let gap = 16.0 * u;
+    let cw = (grid.width() - gap * (c - 1) as f32) / c as f32;
+    let img_h = cw * 0.92;
+    let ch = img_h + 46.0 * u;
+    let row = pk.sel / c;
+    // Keep the selected row in view.
+    let row_top = row as f32 * (ch + gap);
+    let target = (row_top - (grid.height() - ch) * 0.5).max(0.0);
+    let rows = pk.items.len().div_ceil(c);
+    let max = (rows as f32 * (ch + gap) - gap - grid.height()).max(0.0);
+    let target = target.min(max);
     pk.scroll += (target - pk.scroll) * 0.25;
-    let clip = p.with_clip_rect(f.panel.shrink(2.0));
-    let mut x = inner.left() - pk.scroll;
-    let top = inner.top() + 10.0 * u;
+    if (target - pk.scroll).abs() > 0.5 {
+        ctx.request_repaint();
+    }
+    let clip = p.with_clip_rect(grid.expand2(vec2(8.0 * u, 6.0 * u)));
     for (i, (label, tex, _)) in pk.items.iter().enumerate() {
-        let cw = widths[i];
-        let r = Rect::from_min_size(pos2(x, top), vec2(cw, card_h));
-        x += cw + gap;
-        if r.right() < f.panel.left() || r.left() > f.panel.right() {
+        let (r_, c_) = (i / c, i % c);
+        let cell = Rect::from_min_size(pos2(grid.left() + c_ as f32 * (cw + gap), grid.top() + r_ as f32 * (ch + gap) - pk.scroll), vec2(cw, ch));
+        if cell.bottom() < grid.top() - 10.0 || cell.top() > grid.bottom() + 10.0 {
             continue;
         }
         let sel = i == pk.sel;
+        let well = Rect::from_min_size(cell.min, vec2(cw, img_h));
         if sel {
-            clip.rect_filled(r.expand(6.0 * u), CornerRadius::same((5.0 * u) as u8), Color32::from_rgb(120, 190, 40).gamma_multiply(a));
+            clip.rect_filled(cell.expand(5.0 * u), CornerRadius::same((5.0 * u) as u8), Color32::from_rgb(120, 190, 40).gamma_multiply(a));
         }
+        clip.rect_filled(well, 3.0 * u, Color32::from_black_alpha(70).gamma_multiply(a));
+        let (source, title) = label.split_once('\t').unwrap_or(("", label.as_str()));
         match tex {
             Some(t) => {
-                clip.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), if sel { Color32::WHITE } else { Color32::from_gray(150) }.gamma_multiply(a));
+                let [tw, th] = t.size();
+                let asp = tw as f32 / th.max(1) as f32;
+                let box_ = well.shrink(6.0 * u);
+                let (w, h) = if asp > box_.width() / box_.height() { (box_.width(), box_.width() / asp) } else { (box_.height() * asp, box_.height()) };
+                let ir = Rect::from_center_size(box_.center(), vec2(w, h));
+                clip.image(t.id(), ir, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), if sel { Color32::WHITE } else { Color32::from_gray(170) }.gamma_multiply(a));
+            }
+            None if i == 0 => {
+                scene::icon_pub(&clip, Icon::Refresh, well.center() - vec2(0.0, 18.0 * u), 34.0 * u, Color32::from_white_alpha(210).gamma_multiply(a));
+                clip.text(well.center() + vec2(0.0, 30.0 * u), Align2::CENTER_CENTER, "Automatic", FontId::proportional(18.0 * u), Color32::WHITE.gamma_multiply(a));
             }
             None => {
-                clip.rect_filled(r, 4.0 * u, Color32::from_white_alpha(18).gamma_multiply(a));
-                scene::icon_pub(&clip, Icon::Refresh, r.center() - vec2(0.0, 24.0 * u), 36.0 * u, Color32::from_white_alpha(210).gamma_multiply(a));
-                clip.text(r.center() + vec2(0.0, 40.0 * u), Align2::CENTER_CENTER, "Automatic", FontId::proportional(19.0 * u), Color32::WHITE.gamma_multiply(a));
+                clip.text(well.center(), Align2::CENTER_CENTER, "Can't show this one", FontId::proportional(15.0 * u), Color32::from_white_alpha(150).gamma_multiply(a));
             }
         }
-        let font = FontId::proportional(17.0 * u);
-        let t = fit(&clip, label, &font, cw.max(200.0 * u));
-        clip.text(pos2(r.center().x, r.bottom() + 26.0 * u), Align2::CENTER_CENTER, t, font, Color32::from_white_alpha(if sel { 240 } else { 150 }).gamma_multiply(a));
+        if !source.is_empty() {
+            // Source tag in the top-left corner of the picture.
+            let font = FontId::proportional(13.0 * u);
+            let g = clip.layout_no_wrap(source.to_string(), font, Color32::WHITE.gamma_multiply(a));
+            let tr = Rect::from_min_size(well.min + vec2(5.0 * u, 5.0 * u), g.size() + vec2(10.0 * u, 4.0 * u));
+            clip.rect_filled(tr, 3.0 * u, Color32::from_rgba_unmultiplied(20, 60, 10, 220).gamma_multiply(a));
+            clip.galley(tr.min + vec2(5.0 * u, 2.0 * u), g, Color32::WHITE);
+        }
+        let font = FontId::proportional(15.0 * u);
+        let t = fit(&clip, title, &font, cw - 8.0 * u);
+        clip.text(
+            pos2(cell.center().x, well.bottom() + 22.0 * u),
+            Align2::CENTER_CENTER,
+            t,
+            font,
+            Color32::from_white_alpha(if sel { 245 } else { 160 }).gamma_multiply(a),
+        );
+    }
+    // Scroll hint when there are more rows than fit.
+    if max > 1.0 {
+        let frac = (pk.scroll / max).clamp(0.0, 1.0);
+        let track = Rect::from_min_max(pos2(f.panel.right() - 8.0 * u, grid.top()), pos2(f.panel.right() - 4.0 * u, grid.bottom()));
+        p.rect_filled(track, 2.0, Color32::from_white_alpha(25).gamma_multiply(a));
+        let th = (track.height() * grid.height() / (grid.height() + max)).max(20.0 * u);
+        let ty = track.top() + (track.height() - th) * frac;
+        p.rect_filled(Rect::from_min_size(pos2(track.left(), ty), vec2(track.width(), th)), 2.0, Color32::from_white_alpha(140).gamma_multiply(a));
     }
     let status = if !pk.done {
         let dots = ".".repeat(1 + (pk.opened.elapsed().as_millis() / 400 % 3) as usize);
-        format!("Searching online{dots}")
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        format!("Searching online{dots}   {} found so far", pk.items.len() - 1)
     } else if pk.items.len() == 1 {
-        "Nothing found online. You can put your own image in theme\\covers\\.".into()
+        "Nothing found. Press X to search a different name, or Y to use a picture from your PC.".into()
     } else {
-        format!("{} cover(s) found", pk.items.len() - 1)
+        format!("{} covers found", pk.items.len() - 1)
     };
-    p.text(pos2(f.panel.left() + 24.0 * u, f.panel.bottom() - 24.0 * u), Align2::LEFT_CENTER, status, FontId::proportional(17.0 * u), Color32::from_white_alpha(200).gamma_multiply(a));
-    hint_bar(&p, &[("A", "Use This Cover", BTN_A), ("B", "Back", BTN_B)], 100.0 * u, 650.0 * u, u, a);
+    p.text(pos2(f.panel.left() + 24.0 * u, f.panel.bottom() - 22.0 * u), Align2::LEFT_CENTER, status, FontId::proportional(16.0 * u), Color32::from_white_alpha(200).gamma_multiply(a));
+    hint_bar(&p, &[("A", "Use This Cover", BTN_A), ("X", "Search a Different Name", BTN_X), ("Y", "Choose a File", BTN_Y), ("B", "Back", BTN_B)], 100.0 * u, 650.0 * u, u, a);
+
+    // Name entry box over the top of the panel.
+    if let Some(s) = pk.search.as_mut() {
+        let er = Rect::from_min_size(pos2(f.panel.left() + 22.0 * u, f.panel.top() - 46.0 * u), vec2(f.panel.width() - 44.0 * u, 38.0 * u));
+        p.rect_filled(f.panel, 0.0, Color32::from_black_alpha(120));
+        p.text(
+            pos2(er.left(), er.bottom() + 24.0 * u),
+            Align2::LEFT_CENTER,
+            "Type a game name and press Enter. Esc cancels.",
+            FontId::proportional(16.0 * u),
+            Color32::from_white_alpha(220),
+        );
+        let resp = egui::Area::new(egui::Id::unique("picker_search"))
+            .fixed_pos(er.min)
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                ui.add_sized(
+                    er.size(),
+                    egui::TextEdit::singleline(&mut s.text)
+                        .font(FontId::proportional(19.0 * u))
+                        .text_color(Color32::from_rgb(20, 24, 28))
+                        .background_color(Color32::from_rgb(240, 244, 236))
+                        .margin(vec2(10.0 * u, 6.0 * u)),
+                )
+            })
+            .inner;
+        if !s.focus_set {
+            resp.request_focus();
+            s.focus_set = true;
+        } else if resp.lost_focus() {
+            let enter = !ctx.input(|i| i.key_pressed(egui::Key::Escape));
+            let q = s.text.trim().to_string();
+            pk.search = None;
+            pk.typed_at = Some(Instant::now());
+            if enter && !q.is_empty() {
+                let gi = pk.game;
+                app.picker_search(gi, Some(q));
+                app.sounds.play("select");
+            } else {
+                app.sounds.play("back");
+            }
+        }
+    }
 }
 
 pub fn theme_cover_dirs(s: System) -> crate::library::CoverDirs {

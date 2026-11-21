@@ -62,6 +62,8 @@ pub struct Config {
     pub frame_rate: u32,
     /// Show "NXE Launcher vX" in the bottom-right corner.
     pub show_version: bool,
+    /// Cover art on tiles: "fill" (cropped to the whole tile) or "whole" (the full picture).
+    pub cover_style: String,
     /// Button icons: "auto" (follow the controller), "xbox", "playstation", "nintendo".
     pub button_icons: String,
     /// Nintendo controllers confirm with A (right button), like a Switch.
@@ -108,6 +110,7 @@ impl Default for Config {
             gamerpic: "builtin:0".into(),
             frame_rate: 0,
             show_version: false,
+            cover_style: "fill".into(),
             button_icons: "auto".into(),
             switch_layout: true,
             show_hidden: false,
