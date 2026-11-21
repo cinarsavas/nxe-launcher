@@ -90,6 +90,48 @@ pub const PORTS: &[PortInfo] = &[
         needs: "Your own Sonic the Hedgehog (2006) Xbox 360 game files. The game's installer asks for them.",
     },
     PortInfo {
+        name: "Ghostship",
+        repo: "HarbourMasters/Ghostship",
+        folder: "Ghostship",
+        about: "Super Mario 64 as a PC port from the Ship of Harkinian team.",
+        needs: "Your own Super Mario 64 N64 ROM (US). It asks for it on first start.",
+    },
+    PortInfo {
+        name: "Perfect Dark",
+        repo: "fgsfdsfgs/perfect_dark",
+        folder: "PerfectDark",
+        about: "Perfect Dark as a native PC port, with mouse aim and high frame rates.",
+        needs: "Your own Perfect Dark N64 ROM (US v1.1), placed in the port's data folder.",
+    },
+    PortInfo {
+        name: "Sonic 3 A.I.R.",
+        repo: "Eukaryot/sonic3air",
+        folder: "Sonic3AIR",
+        about: "Sonic 3 & Knuckles remastered: widescreen, many improvements and mods.",
+        needs: "Your own Sonic 3 & Knuckles ROM (it can use the one from the Steam release).",
+    },
+    PortInfo {
+        name: "Sonic Mania (RSDKv5)",
+        repo: "RSDKModding/RSDKv5-Decompilation",
+        folder: "RSDKv5",
+        about: "Decompiled engine of Sonic Mania, runs the game natively.",
+        needs: "Data.rsdk from your own copy of Sonic Mania, placed next to the program.",
+    },
+    PortInfo {
+        name: "Sonic 1 & 2 (RSDKv4)",
+        repo: "RSDKModding/RSDKv4-Decompilation",
+        folder: "RSDKv4",
+        about: "Decompiled engine of the 2013 Sonic 1 and Sonic 2 remasters.",
+        needs: "Data.rsdk from your own copy of the remasters, placed next to the program.",
+    },
+    PortInfo {
+        name: "Zelda 3",
+        repo: "snesrev/zelda3",
+        folder: "Zelda3",
+        about: "A Link to the Past reimplemented in C: widescreen and enhancements.",
+        needs: "Your own A Link to the Past SNES ROM (US), named zelda3.sfc.",
+    },
+    PortInfo {
         name: "Dusk",
         repo: "TwilitRealm/dusk",
         folder: "Dusk",
@@ -197,7 +239,14 @@ pub fn latest(agent: &ureq::Agent, repo: &str) -> Result<Release, String> {
     let status = r.status().as_u16();
     let text = r.body_mut().read_to_string().map_err(|e| e.to_string())?;
     if status == 404 {
-        return Err("No releases yet".into());
+        // Some projects only publish pre-releases (betas, rolling builds): take the newest one.
+        let base = std::env::var("NXE_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+        let mut r = agent.get(&format!("{base}/repos/{repo}/releases?per_page=5")).header("Accept", "application/vnd.github+json").call().map_err(|e| e.to_string())?;
+        if r.status().as_u16() != 200 {
+            return Err("No releases yet".into());
+        }
+        let v: serde_json::Value = serde_json::from_str(&r.body_mut().read_to_string().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        return v.as_array().and_then(|a| a.iter().find(|x| x["draft"] != true)).map(parse_release).ok_or_else(|| "No releases yet".into());
     }
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if status != 200 {

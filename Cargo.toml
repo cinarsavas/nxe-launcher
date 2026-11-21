@@ -1,6 +1,6 @@
 [package]
 name = "nxe-launcher"
-version = "0.11.0"
+version = "0.12.0"
 license = "MIT"
 repository = "https://github.com/cinarsavas/nxe-launcher"
 edition = "2021"
@@ -24,3 +24,6 @@ rodio = { version = "0.20", default-features = false, features = ["symphonia-mp3
 opt-level = 3
 lto = "thin"
 strip = true
+
+[build-dependencies]
+winresource = "0.1"

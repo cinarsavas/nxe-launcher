@@ -21,16 +21,29 @@ jobs:
         shell: pwsh
         run: |
           $d = "NXE-Launcher"
-          New-Item -ItemType Directory -Force "$d/theme/covers","$d/theme/sounds","$d/theme/gamerpics" | Out-Null
+          New-Item -ItemType Directory -Force "$d/theme/covers","$d/theme/sounds","$d/theme/gamerpics","$d/theme/music" | Out-Null
           Copy-Item target/release/nxe-launcher.exe,README.md,LICENSE $d
           Compress-Archive -Path $d -DestinationPath "NXE-Launcher-${{ github.ref_name }}-windows-x64.zip"
+      - name: Installer (setup.exe)
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress; $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') { $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value }
+          & $nsis "/DVERSION=$ver" "/DSRC=$PWD\target\release" "/DOUT=$PWD\NXE-Launcher-Setup-${{ github.ref_name }}.exe" installer\nxe-launcher.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
           name: NXE-Launcher-windows-x64
-          path: NXE-Launcher-*.zip
+          path: |
+            NXE-Launcher-*.zip
+            NXE-Launcher-Setup-*.exe
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: NXE-Launcher-*.zip
+          files: |
+            NXE-Launcher-*.zip
+            NXE-Launcher-Setup-*.exe
           generate_release_notes: true

@@ -2,7 +2,7 @@
 
 A fullscreen, console-style dashboard laid out like the 2008 "NXE" dashboard. It launches games on eleven consoles, using your own emulators or built-in cores, plus native PC ports and recompilations.
 
-**[Try the live demo in your browser](https://cinarsavas.github.io/nxe-launcher/)** · **[Download for Windows](https://github.com/cinarsavas/nxe-launcher/releases/latest)**
+**[Try the live demo in your browser](https://cinarsavas.github.io/nxe-launcher/)** · **[Download for Windows](https://github.com/cinarsavas/nxe-launcher/releases/latest)** (`NXE-Launcher-Setup-….exe`)
 
 > Fan project. Not affiliated with or endorsed by Microsoft, Sony or Nintendo. No games, BIOS files, keys or official artwork are included.
 
@@ -238,7 +238,7 @@ Highlight a game and press **Y** (keyboard: C):
 - **Change Cover**, **Achievements**.
 
 ## Get Ports
-PC Ports channel → **Get More Ports** (or Settings → Consoles → PC Ports → Get Ports) lists well-known ports — Zelda 64: Recompiled, Ship of Harkinian, 2 Ship 2 Harkinian, Starship, Spaghetti Kart, Banjo: Recompiled, Goemon 64: Recompiled, SM64 Co-op DX, Unleashed Recompiled, Marathon Recompiled, Dusk. Press A to download the latest Windows release from the project's GitHub page into the launcher's `ports` folder; when a new version comes out the row says **Update** and A updates it (the port's own settings and saves are kept). You always bring your own game files; each entry says which. Each port shows pictures of the game (Left / Right to scroll).
+PC Ports channel → **Get More Ports** (or Settings → Consoles → PC Ports → Get Ports) lists well-known ports — Zelda 64: Recompiled, Ship of Harkinian, 2 Ship 2 Harkinian, Starship, Spaghetti Kart, Banjo: Recompiled, Goemon 64: Recompiled, SM64 Co-op DX, Ghostship, Perfect Dark, Sonic 3 A.I.R., Sonic Mania (RSDKv5), Sonic 1 & 2 (RSDKv4), Zelda 3, Unleashed Recompiled, Marathon Recompiled, Dusk. Press A to download the latest Windows release from the project's GitHub page into the launcher's `ports` folder; when a new version comes out the row says **Update** and A updates it (the port's own settings and saves are kept). You always bring your own game files; each entry says which. Each port shows pictures of the game (Left / Right to scroll).
 
 ## Your profile file
 Your name, gamerpic, theme, play time, pinned and hidden games are kept in **Documents\NXE Launcher\profile.json** — outside the launcher's folder, so they survive deleting or moving it. When you set the launcher up again, Quick Setup says **Welcome Back! Restore My Profile**. Settings → General can also save a copy anywhere (USB stick, cloud folder) and load one. Your RetroAchievements password/token is never stored in it.
@@ -251,6 +251,12 @@ Put MP3, OGG, FLAC or WAV files in `theme\music` and they play shuffled on the d
 
 ## Updates
 NXE Launcher checks GitHub for a new version when it starts (Settings → General → Check for Updates). Nothing installs on its own: **Update to vX** downloads it, swaps the exe and restarts. Settings, profile and games stay.
+
+## Installing
+- **Setup (recommended):** run `NXE-Launcher-Setup-vX.exe` from the latest release. It installs just for you (no administrator rights) into `%LOCALAPPDATA%\Programs\NXE Launcher`, adds NXE Launcher to the Start menu so Windows search finds it, can add a desktop shortcut, and appears in Settings → Apps for uninstalling. Uninstalling asks whether to keep your settings, covers and downloaded cores/ports; your profile in Documents\NXE Launcher is always kept.
+- **Portable:** unzip `NXE-Launcher-vX-windows-x64.zip` anywhere and run `nxe-launcher.exe`. Everything stays in that folder.
+
+Windows may show a SmartScreen warning the first time because the files aren't code-signed: click **More info → Run anyway**.
 
 ## License
 MIT, see `LICENSE`. Trademarks belong to their owners.

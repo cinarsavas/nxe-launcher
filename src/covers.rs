@@ -360,7 +360,7 @@ const PC_PORTS: &[(&str, &str, &str)] = &[
     ("starfox64|starship|sf64", N64, "Star Fox 64 (USA)"),
     ("banjo|bkrecomp", N64, "Banjo-Kazooie (USA)"),
     ("mariokart64|mk64|spaghettikart|spaghetti", N64, "Mario Kart 64 (USA)"),
-    ("sm64|supermario64|render96|mario64", N64, "Super Mario 64 (USA)"),
+    ("sm64|supermario64|render96|mario64|ghostship", N64, "Super Mario 64 (USA)"),
     ("dk64|donkeykong64", N64, "Donkey Kong 64 (USA)"),
     ("goemon|mnsg", N64, "Mystical Ninja Starring Goemon (USA)"),
     ("perfectdark", N64, "Perfect Dark (USA)"),

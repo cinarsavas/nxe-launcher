@@ -89,7 +89,7 @@ footer{color:#6f7d75;font-size:13px;padding:30px 0 50px;border-top:1px solid var
     <h1>Your emulators,<br><span>behind one dashboard.</span></h1>
     <p>NXE Launcher is a fullscreen, controller-first front end in the style of the 2008 NXE dashboard. Pick a game and it opens in the right emulator. Close the game and you're back on the dashboard.</p>
     <div class="btns">
-      <a class="btn primary" href="https://github.com/cinarsavas/nxe-launcher/releases/latest">Download for Windows <small>x64 · free</small></a>
+      <a class="btn primary" href="https://github.com/cinarsavas/nxe-launcher/releases/latest">Download for Windows <small>installer · free</small></a>
       <a class="btn" href="#demo">Try it here first</a>
     </div>
   </div>
@@ -169,7 +169,7 @@ footer{color:#6f7d75;font-size:13px;padding:30px 0 50px;border-top:1px solid var
 
   <div class="cta">
     <h2>Like the feel?</h2>
-    <p>Windows 10 / 11, 64-bit. Unzip and run. No installer, and it doesn't touch the registry.</p>
+    <p>Windows 10 / 11, 64-bit. Run the setup (no admin needed, shows up in Start and Windows search), or grab the portable zip.</p>
     <div class="btns">
       <a class="btn primary" href="https://github.com/cinarsavas/nxe-launcher/releases/latest">Download the latest release</a>
       <a class="btn" href="https://github.com/cinarsavas/nxe-launcher">Source code</a>
@@ -493,7 +493,7 @@ function frame(ms){
   if(da>0){ zoom(1+0.09*pa); g.globalAlpha=da; if(S.intro!==null) dashboard(th,t); g.globalAlpha=1; }
   if(pa>0.01){ const sub=lerp(S.subFrom,1,clamp(S.subAnim,0,1)); zoom((0.9+0.1*pa)*sub); settingsPage(th,t,Math.pow(clamp(pa,0,1),0.8)); }
   g.setTransform(1,0,0,1,0,0);
-  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.11.0",W-22,H-16); g.globalAlpha=1; }
+  if(S.ver){ g.globalAlpha=0.6; g.font='13px "Segoe UI",system-ui,sans-serif'; g.textAlign="right"; g.fillStyle="#fff"; g.fillText("NXE Launcher v0.12.0",W-22,H-16); g.globalAlpha=1; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -163,6 +163,8 @@ pub struct App {
     pub profile: stats::Profile,
     pub details: Option<menu::Details>,
     pending: Vec<Pad>,
+    /// Frames drawn so far (fullscreen is switched on after the first few).
+    frames: u32,
     pub guide: Option<GuideMenu>,
     /// Game being played and when it started.
     pub play_game: Option<usize>,
@@ -301,6 +303,7 @@ impl App {
             profile: stats::Profile::load(),
             details: None,
             pending: vec![],
+            frames: 0,
             guide: None,
             play_game: None,
             play_started: None,
@@ -1262,6 +1265,11 @@ impl eframe::App for App {
 
         // Input: gamepad thread + keyboard. While typing in a text box only Enter/Esc count.
         let editing = self.menu.as_ref().map(|m| m.edit.is_some()).unwrap_or(false);
+        self.frames += 1;
+        if self.frames == 3 && self.fullscreen {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         let mut pads: Vec<Pad> = std::mem::take(&mut self.pending);
         ctx.input(|i| {
             use egui::Key::*;
@@ -1851,6 +1859,11 @@ fn page_depth(k: &str) -> u8 {
     }
 }
 
+fn app_icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/icon-256.png")).map(|i| i.to_rgba8()).unwrap_or_else(|_| image::RgbaImage::new(1, 1));
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
+}
+
 fn main() -> eframe::Result {
     let cfg = Config::load();
     let _ = std::fs::create_dir_all(theme_dir().join("covers"));
@@ -1859,7 +1872,10 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("NXE Launcher")
             .with_inner_size([1600.0, 900.0])
-            .with_fullscreen(cfg.fullscreen),
+            // Created as a normal (maximized) window and switched to fullscreen once it has
+            // drawn: creating it fullscreen straight away can leave the window stuck on Windows.
+            .with_maximized(cfg.fullscreen)
+            .with_icon(app_icon()),
         ..Default::default()
     };
     eframe::run_native("NXE Launcher", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
